@@ -50,6 +50,12 @@ export class UI {
     this.screens.tracks.classList.remove("hidden");
   }
 
+  setStartRaceLoading(loading) {
+    const btn = el("btn-start-race");
+    btn.disabled = loading;
+    btn.textContent = loading ? "Loading…" : "Start Race";
+  }
+
   showCountdown() {
     this._hideAllScreens();
     this.hud.classList.remove("hidden");

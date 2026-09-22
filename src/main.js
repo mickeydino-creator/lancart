@@ -7,11 +7,17 @@ const ui = new UI();
 const game = new Game(canvas, ui);
 
 ui.bind({
-  onPlay: () => ui.showTrackSelect(),
+  onPlay: () => {
+    ui.showTrackSelect();
+    game.preload();
+  },
   onHowTo: () => ui.showHowTo(),
   onHowToBack: () => ui.showMenu(),
   onTracksBack: () => ui.showMenu(),
-  onStartRace: () => game.startRace(),
+  onStartRace: () => {
+    ui.setStartRaceLoading(true);
+    game.startRace().finally(() => ui.setStartRaceLoading(false));
+  },
   onPauseToggle: () => game.togglePause(),
   onResume: () => game.resumeRace(),
   onRestart: () => game.restartRace(),

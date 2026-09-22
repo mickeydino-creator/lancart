@@ -203,6 +203,12 @@ h2 {
   transform: translateY(0px) scale(0.98);
 }
 
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+  pointer-events: none;
+}
+
 .btn-lg {
   padding: 16px 32px;
   font-size: 1.15rem;
@@ -235,6 +241,15 @@ h2 {
   gap: 11px;
   color: var(--text-dim);
   font-size: 0.95rem;
+}
+
+.credits {
+  margin: 18px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--text-dim);
+  opacity: 0.65;
+  max-width: 320px;
 }
 
 .howto-list b {

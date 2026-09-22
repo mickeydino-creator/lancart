@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { cloneScene } from "../assets/AssetLoader.js";
 
 // Waypoints for "Sunset Circuit": long straight, hill climb, sweeping curves,
 // a hairpin, and a descent back to the start/finish straight.
@@ -55,24 +56,28 @@ function sampleTrack(curve) {
 // --- Textures ----------------------------------------------------------------
 
 function asphaltTexture() {
+  // Deliberately dark, low-saturation asphalt: under any lighting this
+  // stays far darker than the grass, so the road never blends into the
+  // environment. Wide, bright edge lines give a second, independent visual
+  // cue that survives even at grazing viewing angles.
   const size = 512;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext("2d");
   const grad = ctx.createLinearGradient(0, 0, size, 0);
-  grad.addColorStop(0, "#2e3136");
-  grad.addColorStop(0.5, "#3c3f45");
-  grad.addColorStop(1, "#2e3136");
+  grad.addColorStop(0, "#17181b");
+  grad.addColorStop(0.5, "#212327");
+  grad.addColorStop(1, "#17181b");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
   for (let i = 0; i < 3200; i++) {
-    const shade = 48 + Math.floor(Math.random() * 26);
-    ctx.fillStyle = `rgba(${shade},${shade},${shade + 3},0.5)`;
+    const shade = 26 + Math.floor(Math.random() * 18);
+    ctx.fillStyle = `rgba(${shade},${shade},${shade + 2},0.5)`;
     const w = 1 + Math.random() * 2.5;
     ctx.fillRect(Math.random() * size, Math.random() * size, w, w);
   }
   // subtle tire scuff streaks along the racing line
-  ctx.strokeStyle = "rgba(15,15,18,0.18)";
+  ctx.strokeStyle = "rgba(8,8,10,0.25)";
   ctx.lineWidth = 6;
   for (let i = 0; i < 10; i++) {
     const x = size * 0.3 + Math.random() * size * 0.4;
@@ -82,15 +87,17 @@ function asphaltTexture() {
     ctx.stroke();
   }
   // dashed center line
-  ctx.fillStyle = "#e9dd8f";
+  ctx.fillStyle = "#ffe27a";
   const dashW = size * 0.028;
   for (let y = 0; y < size; y += size / 6) {
     ctx.fillRect(size / 2 - dashW / 2, y, dashW, size / 10);
   }
-  // curb-style edge lines
-  ctx.fillStyle = "#eceff2";
-  ctx.fillRect(size * 0.045, 0, size * 0.018, size);
-  ctx.fillRect(size * 0.955 - size * 0.018, 0, size * 0.018, size);
+  // wide, bright edge lines - the road's edge must always read clearly,
+  // even when the fill color's contrast is reduced by dynamic lighting
+  ctx.fillStyle = "#f5f7fa";
+  const edgeW = size * 0.04;
+  ctx.fillRect(size * 0.03, 0, edgeW, size);
+  ctx.fillRect(size * 0.97 - edgeW, 0, edgeW, size);
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
@@ -178,6 +185,13 @@ function buildRoadMesh(samples) {
     map: asphaltTexture(),
     roughness: 0.92,
     metalness: 0.03,
+    // The ribbon's winding can twist relative to "up" on some curves
+    // (the ruled surface between left/right offsets isn't guaranteed to
+    // stay consistently wound through every turn), which silently
+    // backface-culls the road from a low chase-cam angle. Double-siding
+    // guarantees the road is never invisible, which matters far more than
+    // the negligible cost for a single thin strip.
+    side: THREE.DoubleSide,
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
@@ -188,12 +202,12 @@ function buildRoadMesh(samples) {
  * separating drivable road from the grass, and a track-day visual cue. */
 function buildCurbs(samples) {
   const half = ROAD_WIDTH / 2;
-  const curbWidth = 0.55;
+  const curbWidth = 1.3;
   const n = samples.length;
   const group = new THREE.Group();
   const tex = curbTexture();
   tex.repeat.set(samples.totalLength / 2.4, 1);
-  const material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
+  const material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7, side: THREE.DoubleSide });
 
   for (const side of [-1, 1]) {
     const positions = [];
@@ -278,7 +292,12 @@ function buildBarriers(samples) {
 
   const stripeTex = curbTexture();
   stripeTex.repeat.set(samples.totalLength / 3.2, 1);
-  const railMat = new THREE.MeshStandardMaterial({ map: stripeTex, roughness: 0.55, metalness: 0.15 });
+  const railMat = new THREE.MeshStandardMaterial({
+    map: stripeTex,
+    roughness: 0.55,
+    metalness: 0.15,
+    side: THREE.DoubleSide,
+  });
 
   for (const side of [-1, 1]) {
     const positions = [];
@@ -471,7 +490,38 @@ function makeSignGeometry(text) {
   return group;
 }
 
-function scatterDecorations(scene, samples) {
+// Source models are authored at arbitrary unit scales; these bring them to
+// real-world tree heights (~4-6m) matching the procedural fallbacks.
+const PINE_GLB_SCALE = 0.0108;
+const COCONUT_GLB_SCALE = 0.9;
+
+function makeGlbTree(kind, treeAssets) {
+  if (kind === "pine" && treeAssets?.pineGltf) {
+    const obj = cloneScene(treeAssets.pineGltf);
+    obj.scale.setScalar(PINE_GLB_SCALE);
+    obj.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+    return obj;
+  }
+  if (kind === "coconut" && treeAssets?.coconutGltf) {
+    const obj = cloneScene(treeAssets.coconutGltf);
+    obj.scale.setScalar(COCONUT_GLB_SCALE);
+    obj.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+    return obj;
+  }
+  return null;
+}
+
+function scatterDecorations(scene, samples, treeAssets) {
   const group = new THREE.Group();
   group.name = "decorations";
   const signTexts = ["TURN", "SLOW", "GO!", "50m"];
@@ -494,9 +544,14 @@ function scatterDecorations(scene, samples) {
       const pos = s.position.clone().addScaledVector(s.right, side * (ROAD_WIDTH / 2 + dist));
       const roll = Math.random();
       let obj;
-      if (roll < 0.4) {
-        obj = makeTreeGeometry("pine");
-        obj.scale.setScalar(0.8 + Math.random() * 0.6);
+      if (roll < 0.34) {
+        obj = makeGlbTree("pine", treeAssets) ?? makeTreeGeometry("pine");
+        obj.rotation.y = Math.random() * Math.PI * 2;
+        obj.scale.multiplyScalar(0.85 + Math.random() * 0.35);
+      } else if (roll < 0.44) {
+        obj = makeGlbTree("coconut", treeAssets) ?? makeTreeGeometry("round");
+        obj.rotation.y = Math.random() * Math.PI * 2;
+        obj.scale.multiplyScalar(0.8 + Math.random() * 0.3);
       } else if (roll < 0.58) {
         obj = makeTreeGeometry("round");
         obj.scale.setScalar(0.85 + Math.random() * 0.5);
@@ -555,6 +610,36 @@ function buildMountains(center, trackRadius) {
   return group;
 }
 
+/** Scattered rolling-hill terrain chunks between the trackside decorations
+ * and the distant mountains - fills the mid-ground so the world doesn't
+ * jump straight from flat grass to a mountain wall. Purely decorative,
+ * tinted to match the grass palette since the source asset has no texture. */
+function buildTerrainHills(center, trackRadius, terrainGltf) {
+  const group = new THREE.Group();
+  const ringRadius = trackRadius + 55;
+  const count = 10;
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + Math.random() * 0.3;
+    const dist = ringRadius + Math.random() * 55;
+    const hill = cloneScene(terrainGltf);
+    const hue = 0.28 + Math.random() * 0.05;
+    hill.traverse((o) => {
+      if (o.isMesh) {
+        o.material = o.material.clone();
+        o.material.color.setHSL(hue, 0.35, 0.4 + Math.random() * 0.1);
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+    const scale = 2.2 + Math.random() * 2.5;
+    hill.scale.setScalar(scale);
+    hill.rotation.y = Math.random() * Math.PI * 2;
+    hill.position.set(center.x + Math.cos(angle) * dist, -0.3, center.z + Math.sin(angle) * dist);
+    group.add(hill);
+  }
+  return group;
+}
+
 function buildStartLights(samples) {
   const group = new THREE.Group();
   const s = samples[0];
@@ -593,7 +678,13 @@ function buildStartLights(samples) {
   );
   banner.position.copy(s.position);
   banner.position.y += 7.55;
-  const bannerBasis = new THREE.Matrix4().makeBasis(s.right, new THREE.Vector3(0, 1, 0), s.tangent);
+  // Face the plane's front (readable, non-mirrored) side back toward
+  // approaching traffic: normal = -tangent, since karts travel toward +tangent.
+  const bannerBasis = new THREE.Matrix4().makeBasis(
+    s.right.clone().negate(),
+    new THREE.Vector3(0, 1, 0),
+    s.tangent.clone().negate()
+  );
   banner.quaternion.setFromRotationMatrix(bannerBasis);
   group.add(banner);
 
@@ -649,6 +740,100 @@ function buildCheckpointArches(samples, checkpoints) {
   return group;
 }
 
+function chevronBoardTexture(direction) {
+  const w = 128;
+  const h = 96;
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffcc1f";
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = "#14181f";
+  ctx.lineWidth = 6;
+  ctx.strokeRect(3, 3, w - 6, h - 6);
+  ctx.strokeStyle = "#14181f";
+  ctx.lineWidth = 14;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  // three chevrons (>>> or <<<) pointing the turn direction
+  for (let i = 0; i < 3; i++) {
+    const cx = direction > 0 ? 30 + i * 28 : w - 30 - i * 28;
+    ctx.beginPath();
+    if (direction > 0) {
+      ctx.moveTo(cx - 14, h / 2 - 22);
+      ctx.lineTo(cx + 14, h / 2);
+      ctx.lineTo(cx - 14, h / 2 + 22);
+    } else {
+      ctx.moveTo(cx + 14, h / 2 - 22);
+      ctx.lineTo(cx - 14, h / 2);
+      ctx.lineTo(cx + 14, h / 2 + 22);
+    }
+    ctx.stroke();
+  }
+  return new THREE.CanvasTexture(canvas);
+}
+
+/**
+ * Chevron "turn direction" boards on the outside edge of sharp corners -
+ * the same visual language real circuits use so the route is obvious from
+ * the 3D scene itself, not just the HUD.
+ */
+function buildTurnArrows(samples) {
+  const group = new THREE.Group();
+  const n = samples.length;
+  const window = 9;
+
+  // signed lateral deviation of the path ahead from a straight extrapolation
+  // - the sign says which way the track bends, the magnitude says how hard.
+  const bend = new Array(n).fill(0);
+  for (let i = 0; i < n; i++) {
+    const cur = samples[i];
+    const ahead = samples[(i + window) % n];
+    const straight = cur.position.clone().addScaledVector(cur.tangent, ahead.position.distanceTo(cur.position));
+    bend[i] = ahead.position.clone().sub(straight).dot(cur.right);
+  }
+
+  const threshold = 1.1;
+  const minSpacing = 22;
+  let lastPick = -1000;
+  const half = ROAD_WIDTH / 2;
+  const postMat = new THREE.MeshStandardMaterial({ color: "#2a2e35", roughness: 0.6, metalness: 0.3 });
+
+  for (let i = 0; i < n; i++) {
+    const mag = Math.abs(bend[i]);
+    if (mag < threshold) continue;
+    if (i - lastPick < minSpacing) continue;
+    // require a local peak so we place one sign per turn, not a cluster
+    const prevMag = Math.abs(bend[(i - 1 + n) % n]);
+    const nextMag = Math.abs(bend[(i + 1) % n]);
+    if (mag < prevMag || mag < nextMag) continue;
+    lastPick = i;
+
+    const turnsPositive = bend[i] > 0;
+    const outsideSide = turnsPositive ? -1 : 1; // outside is opposite the bend direction
+    const s = samples[i];
+    const board = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.2), new THREE.MeshStandardMaterial({
+      map: chevronBoardTexture(turnsPositive ? 1 : -1),
+      roughness: 0.55,
+      side: THREE.DoubleSide,
+    }));
+    board.position.copy(s.position).addScaledVector(s.right, outsideSide * (half + 1.6));
+    board.position.y += 1.5;
+    const basis = new THREE.Matrix4().makeBasis(s.right, new THREE.Vector3(0, 1, 0), s.tangent);
+    board.quaternion.setFromRotationMatrix(basis);
+    board.castShadow = true;
+
+    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 1.5, 6), postMat);
+    post.position.copy(board.position);
+    post.position.y -= 0.75;
+    post.castShadow = true;
+
+    group.add(board, post);
+  }
+  return group;
+}
+
 function buildCheckpoints(samples) {
   const checkpoints = [];
   const n = samples.length;
@@ -667,7 +852,7 @@ function buildCheckpoints(samples) {
 }
 
 export class Track {
-  constructor(scene) {
+  constructor(scene, treeAssets = null) {
     this.scene = scene;
     this.curve = buildCurve();
     this.samples = sampleTrack(this.curve);
@@ -683,11 +868,13 @@ export class Track {
     this.group.add(buildBarriers(this.samples));
     scene.add(this.group);
 
-    scatterDecorations(scene, this.samples);
+    scatterDecorations(scene, this.samples, treeAssets);
     scene.add(buildMountains(center, size / 2));
+    if (treeAssets?.terrainGltf) scene.add(buildTerrainHills(center, size / 2, treeAssets.terrainGltf));
 
     this.checkpoints = buildCheckpoints(this.samples);
     scene.add(buildCheckpointArches(this.samples, this.checkpoints));
+    scene.add(buildTurnArrows(this.samples));
 
     const { group: lightsGroup, lights } = buildStartLights(this.samples);
     scene.add(lightsGroup);

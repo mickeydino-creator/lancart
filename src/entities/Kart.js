@@ -1,245 +1,107 @@
 import * as THREE from "three";
 
-const WHEEL_RADIUS = 0.42;
+// The kart.glb asset is authored nose-forward along its own +X axis at a
+// large arbitrary unit scale. Our world convention (established by the
+// camera/physics code) is nose = local -Z. KART_SCALE brings the model to
+// a real-world kart length (~2.5m); KART_YAW rotates +X to -Z.
+const KART_SCALE = 0.0272;
+const KART_YAW = Math.PI / 2;
+const WHEEL_RADIUS = 0.19; // approximate rolling radius, tuned by eye against the model
 
-function buildWheel(accentColor) {
-  const group = new THREE.Group();
-  const tire = new THREE.Mesh(
-    new THREE.CylinderGeometry(WHEEL_RADIUS, WHEEL_RADIUS, 0.34, 18),
-    new THREE.MeshStandardMaterial({ color: "#181818", roughness: 0.92 })
-  );
-  tire.rotation.z = Math.PI / 2;
-  const rim = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.22, 0.22, 0.36, 10),
-    new THREE.MeshStandardMaterial({ color: "#d8dbe0", metalness: 0.75, roughness: 0.25 })
-  );
-  rim.rotation.z = Math.PI / 2;
-  const accent = new THREE.Mesh(
-    new THREE.TorusGeometry(0.23, 0.035, 6, 14),
-    new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.4, metalness: 0.2 })
-  );
-  accent.rotation.y = Math.PI / 2;
-  group.add(tire, rim, accent);
-  group.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
+const WHEEL_BONE_NAMES = {
+  fl: "Wheel_Front_Left_02",
+  fr: "Wheel_Front_Right_03",
+  rl: "Wheel_Rear_Left_04",
+  rr: "Wheel_Rear_Right_05",
+};
+
+function findBone(root, name) {
+  let found = null;
+  root.traverse((o) => {
+    if (!found && o.isBone && o.name === name) found = o;
   });
-  return group;
-}
-
-/** Tapered pod (used for both the nose and tail) via a low-poly cylinder frustum. */
-function buildPod(radiusFront, radiusBack, length, material) {
-  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radiusBack, radiusFront, length, 8), material);
-  mesh.rotation.x = Math.PI / 2;
-  return mesh;
-}
-
-function buildBody(bodyColor, accentColor) {
-  const group = new THREE.Group();
-  const bodyMat = new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.4, metalness: 0.2 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.35, metalness: 0.15 });
-  const darkMat = new THREE.MeshStandardMaterial({ color: "#1b1e24", roughness: 0.55, metalness: 0.1 });
-
-  // Nose pod: pointed tip at the front (-Z), blends into the tub.
-  const nose = buildPod(0.09, 0.58, 1.3, bodyMat);
-  nose.position.set(0, 0.52, -1.28);
-  group.add(nose);
-
-  // Main tub / cockpit floor - a wide, low, rounded-feeling hull.
-  const tub = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.5, 1.55), bodyMat);
-  tub.position.set(0, 0.52, 0.15);
-  group.add(tub);
-
-  // Shoulder line - a slimmer upper deck to break up the box silhouette.
-  const deck = new THREE.Mesh(new THREE.BoxGeometry(1.18, 0.22, 1.3), bodyMat);
-  deck.position.set(0, 0.84, 0.05);
-  group.add(deck);
-
-  // Belly pan - a contrasting dark underside sliver for a two-tone look.
-  const belly = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.14, 2.7), darkMat);
-  belly.position.set(0, 0.24, 0.1);
-  group.add(belly);
-
-  // Tail pod: tapers to a narrow point at the back (+Z).
-  const tail = buildPod(0.52, 0.12, 0.95, bodyMat);
-  tail.position.set(0, 0.5, 1.42);
-  group.add(tail);
-
-  // Side pods / fenders over the wheels - what makes the silhouette read as
-  // a kart rather than a generic wedge.
-  for (const side of [-1, 1]) {
-    const pod = new THREE.Mesh(new THREE.CapsuleGeometry(0.32, 1.35, 3, 8), accentMat);
-    pod.rotation.x = Math.PI / 2;
-    pod.position.set(side * 0.95, 0.42, 0.02);
-    group.add(pod);
-
-    // side accent stripe (livery detail)
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.14, 2.0), bodyMat);
-    stripe.position.set(side * 1.18, 0.5, 0.05);
-    group.add(stripe);
-  }
-
-  // Cockpit shell
-  const cockpit = new THREE.Mesh(
-    new THREE.SphereGeometry(0.52, 14, 10, 0, Math.PI * 2, 0, Math.PI / 1.8),
-    darkMat
-  );
-  cockpit.position.set(0, 0.95, 0.05);
-  cockpit.scale.set(1, 0.7, 1.25);
-  group.add(cockpit);
-
-  // Small curved windscreen in front of the driver.
-  const windscreen = new THREE.Mesh(
-    new THREE.SphereGeometry(0.5, 12, 8, 0, Math.PI, 0, Math.PI / 2.6),
-    new THREE.MeshStandardMaterial({ color: "#bfe8ff", roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.55 })
-  );
-  windscreen.position.set(0, 0.98, -0.55);
-  windscreen.rotation.x = Math.PI;
-  windscreen.scale.set(1, 0.7, 0.6);
-  group.add(windscreen);
-
-  const driver = new THREE.Mesh(
-    new THREE.CapsuleGeometry(0.27, 0.38, 4, 8),
-    new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.6 })
-  );
-  driver.position.set(0, 1.12, 0.25);
-  group.add(driver);
-
-  const helmet = new THREE.Mesh(
-    new THREE.SphereGeometry(0.24, 14, 10),
-    new THREE.MeshStandardMaterial({ color: "#eef0f3", roughness: 0.3 })
-  );
-  helmet.position.set(0, 1.48, 0.25);
-  group.add(helmet);
-  const visor = new THREE.Mesh(
-    new THREE.SphereGeometry(0.16, 10, 8, 0, Math.PI * 2, 0, Math.PI / 2.2),
-    new THREE.MeshStandardMaterial({ color: "#171a1f", roughness: 0.2, metalness: 0.3 })
-  );
-  visor.position.set(0, 1.47, 0.02);
-  group.add(visor);
-
-  // Spoiler assembly
-  const spoiler = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.07, 0.34), accentMat);
-  spoiler.position.set(0, 0.98, 1.5);
-  const spoilerPostGeo = new THREE.BoxGeometry(0.07, 0.34, 0.07);
-  const postL = new THREE.Mesh(spoilerPostGeo, darkMat);
-  postL.position.set(-0.58, 0.78, 1.5);
-  const postR = postL.clone();
-  postR.position.x = 0.58;
-  group.add(spoiler, postL, postR);
-
-  // Rear diffuser fins
-  for (const side of [-0.35, 0, 0.35]) {
-    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.12, 0.4), darkMat);
-    fin.position.set(side, 0.24, 1.85);
-    group.add(fin);
-  }
-
-  // Front splitter + bumper
-  const bumper = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.2, 0.22), darkMat);
-  bumper.position.set(0, 0.28, -1.82);
-  group.add(bumper);
-  const splitter = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.05, 0.32), accentMat);
-  splitter.position.set(0, 0.17, -1.86);
-  group.add(splitter);
-
-  // Headlights
-  const headlightMat = new THREE.MeshStandardMaterial({
-    color: "#fff6d8",
-    emissive: "#fff2b0",
-    emissiveIntensity: 0.9,
-  });
-  for (const side of [-0.32, 0.32]) {
-    const light = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 8), headlightMat);
-    light.position.set(side, 0.58, -1.86);
-    group.add(light);
-  }
-
-  group.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
-  });
-
-  return { group, driver };
+  return found;
 }
 
 /**
  * Kart handles ONLY the visual representation and its reaction to motion
  * state (tilt, lean, wheel spin/steer, boost flame, brake lights).
  * All physics/state math lives in Physics.js / the kart's state object.
+ *
+ * `model` is a pre-loaded, pre-cloned GLTF scene (see AssetLoader.js) -
+ * loading/cloning happens once up front in Game.js so this class stays
+ * fully synchronous and easy to instantiate per-kart (including future
+ * additional player-controlled karts for LAN multiplayer).
  */
 export class Kart {
-  constructor({ bodyColor = "#ff5d3b", accentColor = "#ffd23f", isPlayer = false } = {}) {
+  constructor({ model, isPlayer = false } = {}) {
     this.isPlayer = isPlayer;
     this.root = new THREE.Group();
-
-    const { group: bodyGroup } = buildBody(bodyColor, accentColor);
-    this.bodyGroup = bodyGroup;
     this.tiltGroup = new THREE.Group();
-    this.tiltGroup.add(bodyGroup);
     this.root.add(this.tiltGroup);
 
-    this.wheels = {
-      fl: buildWheel(accentColor),
-      fr: buildWheel(accentColor),
-      rl: buildWheel(accentColor),
-      rr: buildWheel(accentColor),
+    const modelWrapper = new THREE.Group();
+    modelWrapper.rotation.y = KART_YAW;
+    modelWrapper.scale.setScalar(KART_SCALE);
+    modelWrapper.add(model);
+    this.tiltGroup.add(modelWrapper);
+
+    model.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+
+    this.wheelBones = {
+      fl: findBone(model, WHEEL_BONE_NAMES.fl),
+      fr: findBone(model, WHEEL_BONE_NAMES.fr),
+      rl: findBone(model, WHEEL_BONE_NAMES.rl),
+      rr: findBone(model, WHEEL_BONE_NAMES.rr),
     };
-    this.wheels.fl.position.set(-0.78, 0.42, -0.95);
-    this.wheels.fr.position.set(0.78, 0.42, -0.95);
-    this.wheels.rl.position.set(-0.82, 0.42, 0.95);
-    this.wheels.rr.position.set(0.82, 0.42, 0.95);
-    this.steerGroupFL = new THREE.Group();
-    this.steerGroupFR = new THREE.Group();
-    this.steerGroupFL.position.copy(this.wheels.fl.position);
-    this.steerGroupFR.position.copy(this.wheels.fr.position);
-    this.wheels.fl.position.set(0, 0, 0);
-    this.wheels.fr.position.set(0, 0, 0);
-    this.steerGroupFL.add(this.wheels.fl);
-    this.steerGroupFR.add(this.wheels.fr);
 
-    this.root.add(this.steerGroupFL, this.steerGroupFR, this.wheels.rl, this.wheels.rr);
+    // Scaled half-length, used to place add-on effects (lights, flames)
+    // relative to the actual model regardless of exact source proportions.
+    const box = new THREE.Box3().setFromObject(modelWrapper);
+    const halfLength = (box.max.z - box.min.z) / 2;
+    const topY = box.max.y;
 
-    // brake lights
+    // brake lights (small emissive add-ons - the source model has no
+    // separate light geometry to target)
     const brakeMat = new THREE.MeshStandardMaterial({
       color: "#3a0d0d",
       emissive: "#ff2222",
       emissiveIntensity: 0,
     });
     this.brakeMat = brakeMat;
-    const brakeGeo = new THREE.BoxGeometry(0.26, 0.12, 0.06);
+    const brakeGeo = new THREE.BoxGeometry(0.26, 0.1, 0.05);
     const bl = new THREE.Mesh(brakeGeo, brakeMat);
-    bl.position.set(-0.55, 0.58, 1.9);
+    bl.position.set(-0.42, topY * 0.55, halfLength + 0.05);
     const br = bl.clone();
-    br.position.x = 0.55;
-    this.root.add(bl, br);
+    br.position.x = 0.42;
+    this.tiltGroup.add(bl, br);
 
-    // drift spark / boost flame effect
+    // boost flame
     this.boostFlames = [];
     const flameMat = new THREE.MeshBasicMaterial({ color: "#3fd1ff", transparent: true, opacity: 0 });
-    for (const side of [-0.38, 0.38]) {
-      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.85, 8), flameMat.clone());
+    for (const side of [-0.3, 0.3]) {
+      const flame = new THREE.Mesh(new THREE.ConeGeometry(0.14, 0.8, 8), flameMat.clone());
       flame.rotation.x = -Math.PI / 2;
-      flame.position.set(side, 0.42, 2.0);
-      this.root.add(flame);
+      flame.position.set(side, topY * 0.4, halfLength + 0.5);
+      this.tiltGroup.add(flame);
       this.boostFlames.push(flame);
     }
 
-    // drift sparks (small glowing particles at rear wheels)
+    // drift sparks near the rear wheels
     this.driftSparkMat = new THREE.MeshBasicMaterial({ color: "#ffd23f", transparent: true, opacity: 0 });
     this.driftSparks = [];
-    for (const side of [-0.82, 0.82]) {
-      const spark = new THREE.Mesh(new THREE.SphereGeometry(0.12, 6, 6), this.driftSparkMat.clone());
-      spark.position.set(side, 0.25, 1.1);
-      this.root.add(spark);
+    for (const side of [-0.55, 0.55]) {
+      const spark = new THREE.Mesh(new THREE.SphereGeometry(0.1, 6, 6), this.driftSparkMat.clone());
+      spark.position.set(side, 0.15, halfLength - 0.3);
+      this.tiltGroup.add(spark);
       this.driftSparks.push(spark);
     }
 
-    this.root.castShadow = true;
     this._currentTilt = 0;
     this._currentLean = 0;
     this._bobPhase = Math.random() * Math.PI * 2;
@@ -251,9 +113,9 @@ export class Kart {
 
   /** World-space positions of the rear wheel contact points (for skid trails). */
   getRearWheelPositions() {
-    return [this.wheels.rl, this.wheels.rr].map((w) => {
+    return [this.wheelBones.rl, this.wheelBones.rr].map((bone) => {
       const p = new THREE.Vector3();
-      w.getWorldPosition(p);
+      bone.getWorldPosition(p);
       p.y = 0.05;
       return p;
     });
@@ -282,17 +144,18 @@ export class Kart {
     this.tiltGroup.rotation.set(this._currentTilt, 0, this._currentLean);
     this.tiltGroup.position.y = bob;
 
-    // wheel steering visual (front wheels turn with steering input; negated
-    // to match Physics.js's heading convention - see the note there)
+    // wheel steering + spin, driven directly on the model's rig bones.
+    // Steer is negated to match Physics.js's heading convention (see the
+    // note there); spin is around each bone's local lateral (Z) axis.
     const steerAngle = -state.steerVisual * 0.5;
-    this.steerGroupFL.rotation.y = steerAngle;
-    this.steerGroupFR.rotation.y = steerAngle;
-
-    // wheel spin based on speed
     const spin = (state.speed / WHEEL_RADIUS) * dt;
-    for (const key of Object.keys(this.wheels)) {
-      this.wheels[key].rotation.x += spin;
-    }
+    const { fl, fr, rl, rr } = this.wheelBones;
+    fl.rotation.z += spin;
+    fr.rotation.z += spin;
+    rl.rotation.z += spin;
+    rr.rotation.z += spin;
+    fl.rotation.y = steerAngle;
+    fr.rotation.y = steerAngle;
 
     // brake light
     this.brakeMat.emissiveIntensity = state.braking ? 2.2 : 0.05;

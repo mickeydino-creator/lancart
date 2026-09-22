@@ -2,24 +2,15 @@ import * as THREE from "three";
 import { Track } from "../world/Track.js";
 import { Kart } from "../entities/Kart.js";
 import { SkidTrail } from "../entities/SkidTrail.js";
-import { AIController } from "../entities/AIController.js";
 import { ChaseCamera } from "../camera/ChaseCamera.js";
 import { RaceManager } from "../race/RaceManager.js";
 import { InputManager } from "../input/InputManager.js";
 import { KeyboardController } from "../input/KeyboardController.js";
 import { AudioManager } from "../audio/AudioManager.js";
+import { loadModel, cloneScene, preloadAssets } from "../assets/AssetLoader.js";
 import { PHYSICS, createKartState, stepKartPhysics, resolveKartCollisions } from "../physics/Physics.js";
 
-const AI_COLORS = [
-  ["#3fd1ff", "#0d1b26"],
-  ["#7effc1", "#0d2617"],
-  ["#c77dff", "#22093b"],
-  ["#ffb703", "#3b2400"],
-  ["#ff5d9e", "#3b0d24"],
-];
-const PLAYER_COLOR = ["#ff5d3b", "#ffd23f"];
 const TOTAL_LAPS = 3;
-const AI_COUNT = 5;
 
 function buildSkyTexture() {
   const canvas = document.createElement("canvas");
@@ -39,12 +30,19 @@ function buildSkyTexture() {
   return tex;
 }
 
+/**
+ * Single-player race game. Kart/state/input arrays are still indexed
+ * collections (not hardcoded to one kart) so a future LAN version can add
+ * more player-controlled karts without restructuring this loop - only the
+ * AI opponent source has been removed.
+ */
 export class Game {
   constructor(canvas, ui) {
     this.canvas = canvas;
     this.ui = ui;
     this.audio = new AudioManager();
     this.initialized = false;
+    this.initPromise = null;
     this.paused = false;
     this.clock = new THREE.Clock();
     this._prevCollisionImpulse = [];
@@ -55,10 +53,22 @@ export class Game {
     this._loop = this._loop.bind(this);
   }
 
-  init() {
-    if (this.initialized) return;
-    this.initialized = true;
+  /** Kick off asset downloads early (e.g. as soon as the track-select
+   * screen is shown) so the wait at "Start Race" is minimal. Safe to call
+   * more than once - loadModel caches by URL. */
+  preload() {
+    preloadAssets();
+  }
 
+  async init() {
+    if (this.initialized) return;
+    if (this.initPromise) return this.initPromise;
+    this.initPromise = this._init();
+    await this.initPromise;
+    this.initialized = true;
+  }
+
+  async _init() {
     this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -105,20 +115,24 @@ export class Game {
     fill.position.set(70, 40, -60);
     this.scene.add(fill);
 
-    this.track = new Track(this.scene);
+    const [kartGltf, pineGltf, coconutGltf, terrainGltf] = await Promise.all([
+      loadModel("/models/kart.glb"),
+      loadModel("/models/pine_tree.glb"),
+      loadModel("/models/coconut_tree.glb"),
+      loadModel("/models/terrain.glb"),
+    ]);
+
+    this.track = new Track(this.scene, { pineGltf, coconutGltf, terrainGltf });
     this.skidTrail = new SkidTrail(this.scene);
     this._skidSpawnTimer = [];
 
-    this.kartCount = 1 + AI_COUNT;
+    this.kartCount = 1;
     this.playerIndex = 0;
     this.karts = [];
     this.states = [];
-    this.ai = [];
 
     for (let i = 0; i < this.kartCount; i++) {
-      const isPlayer = i === this.playerIndex;
-      const [body, accent] = isPlayer ? PLAYER_COLOR : AI_COLORS[(i - 1) % AI_COLORS.length];
-      const kart = new Kart({ bodyColor: body, accentColor: accent, isPlayer });
+      const kart = new Kart({ model: cloneScene(kartGltf), isPlayer: i === this.playerIndex });
       kart.addToScene(this.scene);
       this.karts.push(kart);
 
@@ -128,11 +142,6 @@ export class Game {
       this._prevCollisionImpulse.push(0);
       this._prevBoosting.push(false);
       this._skidSpawnTimer.push(0);
-
-      const laneOffset = isPlayer ? 0 : ((i - 1) - (AI_COUNT - 1) / 2) * 2.2;
-      this.ai.push(
-        isPlayer ? null : new AIController(this.track, { skill: 0.86 + Math.random() * 0.22, laneOffset })
-      );
     }
 
     this.inputManager = new InputManager();
@@ -198,10 +207,10 @@ export class Game {
     }
   }
 
-  startRace() {
+  async startRace() {
     this.audio.init();
     this.audio.resume();
-    if (!this.initialized) this.init();
+    await this.init();
     this._resetPositions();
     this.raceManager.reset();
     this._setStartLights(3);
@@ -293,7 +302,7 @@ export class Game {
   _stepPhysics(dt) {
     for (let i = 0; i < this.kartCount; i++) {
       const state = this.states[i];
-      const input = i === this.playerIndex ? this.inputManager.get() : this.ai[i].computeInput(state);
+      const input = this.inputManager.get();
       stepKartPhysics(state, input, dt, this.track);
     }
     resolveKartCollisions(this.states);
