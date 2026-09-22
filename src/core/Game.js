@@ -115,14 +115,13 @@ export class Game {
     fill.position.set(70, 40, -60);
     this.scene.add(fill);
 
-    const [kartGltf, pineGltf, coconutGltf, terrainGltf] = await Promise.all([
+    const [kartGltf, pineGltf, coconutGltf] = await Promise.all([
       loadModel("/models/kart.glb"),
       loadModel("/models/pine_tree.glb"),
       loadModel("/models/coconut_tree.glb"),
-      loadModel("/models/terrain.glb"),
     ]);
 
-    this.track = new Track(this.scene, { pineGltf, coconutGltf, terrainGltf });
+    this.track = new Track(this.scene, { pineGltf, coconutGltf });
     this.skidTrail = new SkidTrail(this.scene);
     this._skidSpawnTimer = [];
 

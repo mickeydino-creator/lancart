@@ -37,6 +37,5 @@ export function preloadAssets() {
     loadModel("/models/kart.glb"),
     loadModel("/models/pine_tree.glb"),
     loadModel("/models/coconut_tree.glb"),
-    loadModel("/models/terrain.glb"),
   ]);
 }

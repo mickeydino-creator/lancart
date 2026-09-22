@@ -777,38 +777,6 @@ function buildMountains(center, trackRadius, samples) {
   return group;
 }
 
-/** Scattered rolling-hill terrain chunks between the trackside decorations
- * and the distant mountains - fills the mid-ground so the world doesn't
- * jump straight from flat grass to a mountain wall. One InstancedMesh
- * (tinted per-instance) instead of a cloned mesh+material per hill. */
-function buildTerrainHills(center, trackRadius, terrainGltf, samples) {
-  const extracted = extractFirstMeshGeometry(terrainGltf);
-  if (!extracted) return null;
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
-  if (!extracted.geometry.attributes.color) paintVertexColor(extracted.geometry, new THREE.Color(1, 1, 1));
-  const batch = new InstanceBatch(extracted.geometry, mat, { useColor: true });
-
-  const ringRadius = trackRadius + 55;
-  const count = 10;
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * Math.PI * 2 + Math.random() * 0.3;
-    const dist = ringRadius + Math.random() * 55;
-    const hue = 0.28 + Math.random() * 0.05;
-    const scale = 2.2 + Math.random() * 2.5;
-    const x = center.x + Math.cos(angle) * dist;
-    const z = center.z + Math.sin(angle) * dist;
-    const y = groundElevationAt(x, z, samples) + 0.1;
-    _q.setFromAxisAngle(UP, Math.random() * Math.PI * 2);
-    batch.add(
-      new THREE.Vector3(x, y, z),
-      _q.clone(),
-      _scale.set(scale, scale, scale).clone(),
-      new THREE.Color().setHSL(hue, 0.35, 0.4 + Math.random() * 0.1)
-    );
-  }
-  return batch.build();
-}
-
 function buildStartLights(samples) {
   const group = new THREE.Group();
   const s = samples[0];
@@ -1062,10 +1030,6 @@ export class Track {
 
     scatterDecorations(scene, this.samples, treeAssets);
     scene.add(buildMountains(center, size / 2, this.samples));
-    if (treeAssets?.terrainGltf) {
-      const hills = buildTerrainHills(center, size / 2, treeAssets.terrainGltf, this.samples);
-      if (hills) scene.add(hills);
-    }
 
     this.checkpoints = buildCheckpoints(this.samples);
     scene.add(buildCheckpointArches(this.samples, this.checkpoints));
