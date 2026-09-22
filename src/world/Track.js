@@ -16,14 +16,14 @@ const WAYPOINTS = [
   [64, 7, -10],
   [42, 4, 8],
   [18, 1, 18],
-  [-8, 0, 14],
-  [-30, 0, -2],
-  [-40, 0, -20],
-  [-46, 0, -45],
-  [-38, 0, -68],
+  [-2, 0, 22],
+  [-36, 0, -4],
+  [-50, 0, -24],
+  [-56, 0, -50],
+  [-44, 0, -72],
   [-18, 0, -75],
-  [-6, 0, -55],
-  [-4, 0, -25],
+  [-22, 0, -50],
+  [-24, 0, -18],
 ];
 
 const ROAD_WIDTH = 15;
@@ -236,7 +236,7 @@ function buildRoadMesh(samples) {
  * separating drivable road from the grass, and a track-day visual cue. */
 function buildCurbs(samples) {
   const half = ROAD_WIDTH / 2;
-  const curbWidth = 1.3;
+  const curbWidth = 0.6;
   const n = samples.length;
   const group = new THREE.Group();
   const tex = curbTexture();
