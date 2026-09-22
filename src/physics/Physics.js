@@ -1,7 +1,7 @@
 import * as THREE from "three";
 
 export const PHYSICS = {
-  maxSpeed: 32, // m/s, normal top speed
+  maxSpeed: 28, // m/s, normal top speed - trimmed slightly from 32
   maxReverseSpeed: 11,
   engineForce: 26,
   brakeForce: 38,
@@ -19,7 +19,7 @@ export const PHYSICS = {
   boostSpeedLevel2: 1.32,
   boostDurationLevel1: 0.9,
   boostDurationLevel2: 1.5,
-  manualBoostMultiplier: 1.3,
+  manualBoostMultiplier: 1.35,
   manualBoostDrain: 0.6, // fuel per second
   manualBoostRegen: 0.18, // fuel per second when not boosting
   offRoadDrag: 2.6,
@@ -184,7 +184,10 @@ export function stepKartPhysics(state, input, dt, track) {
       state.speed *= PHYSICS.collisionSpeedRetention;
       state.collisionImpulse = Math.max(state.collisionImpulse, Math.min(1, Math.abs(state.speed) / 10));
     }
-    const targetY = info.elevation + 0.32;
+    // Matches the kart model's own measured wheel-bottom offset (~0.31
+    // below its root origin) so the tires sit flush on the road instead
+    // of hovering a visible centimeter or two above it.
+    const targetY = info.elevation + 0.305;
     // Fast-but-smooth vertical follow: quick enough that the car doesn't
     // visibly sink below a rising slope (the old dt*8 rate lagged behind
     // steep elevation changes), but still lerped for a touch of suspension

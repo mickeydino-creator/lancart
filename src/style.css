@@ -426,6 +426,21 @@ h2 {
   gap: 12px;
 }
 
+.nitro-meter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.nitro-label {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  color: var(--accent-3);
+  text-shadow: 0 0 8px rgba(63, 209, 255, 0.6);
+}
+
 .boost-bar-wrap {
   width: 150px;
   height: 12px;
@@ -433,6 +448,11 @@ h2 {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid var(--panel-border);
   overflow: hidden;
+  transition: box-shadow 0.15s ease;
+}
+
+.boost-bar-wrap.active {
+  box-shadow: 0 0 14px 2px rgba(63, 209, 255, 0.8);
 }
 
 .boost-bar-fill {

@@ -98,7 +98,7 @@ export class UI {
     this.screens.results.classList.remove("hidden");
   }
 
-  updateHUD({ lap, totalLaps, position, elapsed, speedKmh, drifting, boostLevel, boostFuel }) {
+  updateHUD({ lap, totalLaps, position, elapsed, speedKmh, drifting, boostLevel, boostFuel, boosting }) {
     el("hud-lap-text").textContent = `LAP ${lap}/${totalLaps}`;
     el("hud-position-text").textContent = ORDINALS[position - 1] ?? `${position}th`;
     el("hud-timer-text").textContent = formatTime(elapsed);
@@ -117,6 +117,7 @@ export class UI {
       boostLevel >= 2 ? "SUPER BOOST!" : boostLevel >= 1 ? "BOOST READY" : "DRIFT";
 
     el("boost-bar-fill").style.width = `${Math.round(boostFuel * 100)}%`;
+    el("boost-bar-wrap").classList.toggle("active", !!boosting);
   }
 
   flashMessage(text, duration = 1400) {

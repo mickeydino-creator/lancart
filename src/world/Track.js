@@ -46,7 +46,15 @@ function buildCurve() {
 function sampleTrack(curve) {
   // Build arc-length-parameterized samples so distance-along-track and
   // nearest-point queries are cheap and uniform.
-  const raw = curve.getSpacedPoints(SEGMENTS);
+  // getSpacedPoints(SEGMENTS) returns SEGMENTS+1 points, and for a closed
+  // curve the last one coincides exactly with the first - keeping that
+  // duplicate meant the final sample's tangent was computed as
+  // (raw[0] - raw[0]).normalize(), a zero vector, which produced a
+  // degenerate right/tangent basis (and a broken road quad) right at the
+  // finish line seam. Drop the duplicate so every sample has a real
+  // "next" point, including the true wrap from the last sample back to
+  // the first.
+  const raw = curve.getSpacedPoints(SEGMENTS).slice(0, -1);
   const samples = [];
   let cumulative = 0;
   const up = new THREE.Vector3(0, 1, 0);

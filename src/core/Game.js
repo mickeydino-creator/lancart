@@ -312,7 +312,7 @@ export class Game {
       this.audio.playCollision();
     }
     if (playerState.isBoosting && !this._prevBoosting[this.playerIndex]) {
-      this.chaseCamera.shake(0.15, 0.15);
+      this.chaseCamera.shake(0.22, 0.2);
       this.audio.playBoost();
     }
     this._prevCollisionImpulse[this.playerIndex] = playerState.collisionImpulse;
@@ -356,6 +356,7 @@ export class Game {
       drifting: state.isDrifting,
       boostLevel: state.driftBoostLevel,
       boostFuel: state.manualBoostFuel,
+      boosting: state.isBoosting,
     });
   }
 }
