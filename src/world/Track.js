@@ -87,6 +87,25 @@ function groundElevationAt(x, z, samples) {
   return bestElevation * smooth + GROUND_BASE_Y;
 }
 
+// Road clearance a roadside prop needs from the CLOSEST point of the track
+// anywhere on the lap, not just the sample it was placed relative to - a
+// compact circuit can pass close to itself elsewhere (see the reshaped
+// return leg), so a prop offset from its "local" sample can still land on
+// a different, nearer stretch of the same road. half-road-width + trimmed
+// curb footprint + a buffer.
+const ROAD_CLEAR_DISTANCE = ROAD_WIDTH / 2 + 0.9;
+
+function isClearOfRoad(x, z, samples, minDist = ROAD_CLEAR_DISTANCE) {
+  const minDistSq = minDist * minDist;
+  for (let i = 0; i < samples.length; i++) {
+    const p = samples[i].position;
+    const dx = p.x - x;
+    const dz = p.z - z;
+    if (dx * dx + dz * dz < minDistSq) return false;
+  }
+  return true;
+}
+
 // --- Textures ----------------------------------------------------------------
 
 function asphaltTexture() {
@@ -637,6 +656,10 @@ function scatterDecorations(scene, samples, treeAssets) {
       if (Math.random() < 0.3) continue; // leave gaps, avoid a wall of props
       const dist = 4.5 + Math.random() * 11;
       const pos = s.position.clone().addScaledVector(s.right, side * (ROAD_WIDTH / 2 + dist));
+      // The offset above only guarantees clearance from THIS sample; on a
+      // compact loop the road can pass close to itself elsewhere, so also
+      // check against the whole lap before placing anything.
+      if (!isClearOfRoad(pos.x, pos.z, samples)) continue;
       pos.y = groundElevationAt(pos.x, pos.z, samples);
       const roll = Math.random();
 
@@ -976,6 +999,7 @@ function buildTurnArrows(samples) {
     const outsideSide = turnsPositive ? -1 : 1; // outside is opposite the bend direction
     const s = samples[i];
     const boardPos = s.position.clone().addScaledVector(s.right, outsideSide * (half + 1.6));
+    if (!isClearOfRoad(boardPos.x, boardPos.z, samples)) continue;
     boardPos.y += 1.5;
     const basis = new THREE.Matrix4().makeBasis(s.right, new THREE.Vector3(0, 1, 0), s.tangent);
     _q.setFromRotationMatrix(basis);

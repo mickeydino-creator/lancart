@@ -325,8 +325,14 @@ export class Game {
       this._driftTickTimer = 0.14;
     }
 
+    if (playerState.braking && Math.abs(playerState.speed) > 6) {
+      this.audio.playBrakeScreech(Math.abs(playerState.speed) / PHYSICS.maxSpeed);
+    }
+
     const speedRatio = Math.min(1, Math.abs(playerState.speed) / PHYSICS.maxSpeed);
-    this.audio.updateEngine(speedRatio, playerState.isBoosting);
+    const playerInput = this.inputManager.get();
+    this.audio.updateEngine(speedRatio, playerState.isBoosting, playerInput.throttle, playerState.offRoad);
+    this.audio.tick(dt);
   }
 
   _updateSkidMarks(kartIndex, dt) {

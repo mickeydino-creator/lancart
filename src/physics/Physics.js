@@ -6,12 +6,12 @@ export const PHYSICS = {
   engineForce: 26,
   brakeForce: 38,
   reverseForce: 20,
-  rollingFriction: 0.5, // 1/s decay when coasting
+  rollingFriction: 0.65, // 1/s decay when coasting - a bit more engine braking feel
   dragCoeff: 0.0022,
-  baseTurnRate: 2.15, // rad/s at full grip - moderate, predictable sensitivity
+  baseTurnRate: 2.3, // rad/s at full grip - moderate, predictable sensitivity
   lowSpeedTurnFloor: 3, // m/s below which turning authority ramps from 0
   driftTurnMultiplier: 1.35,
-  driftSlipAngle: 0.3, // tamer slide than a full oversteer spin
+  driftSlipAngle: 0.22, // tamer slide than a full oversteer spin
   driftMinSpeed: 8,
   driftChargeLevel1: 0.7, // seconds held to reach mini-boost
   driftChargeLevel2: 1.6, // seconds held to reach super-boost
@@ -25,7 +25,7 @@ export const PHYSICS = {
   offRoadDrag: 2.6,
   barrierMargin: 0.4,
   kartRadius: 1.0,
-  collisionSpeedRetention: 0.78, // softer barrier hits, less frustrating
+  collisionSpeedRetention: 0.85, // softer barrier hits, less frustrating
 };
 
 export function createKartState(position, heading) {
@@ -164,7 +164,7 @@ export function stepKartPhysics(state, input, dt, track) {
   // Slide angle during a drift: the kart's travel direction lags behind
   // (stays straighter than) its nose, so the tail visually slides wide.
   const targetSlip = state.isDrifting ? state.driftDirection * PHYSICS.driftSlipAngle : 0;
-  state.moveHeading = THREE.MathUtils.lerp(state.moveHeading ?? state.heading, state.heading + targetSlip, Math.min(1, dt * 6));
+  state.moveHeading = THREE.MathUtils.lerp(state.moveHeading ?? state.heading, state.heading + targetSlip, Math.min(1, dt * 8));
 
   // --- Integrate position -------------------------------------------------
   const dir = new THREE.Vector3(Math.sin(state.moveHeading), 0, Math.cos(state.moveHeading));
@@ -185,7 +185,15 @@ export function stepKartPhysics(state, input, dt, track) {
       state.collisionImpulse = Math.max(state.collisionImpulse, Math.min(1, Math.abs(state.speed) / 10));
     }
     const targetY = info.elevation + 0.32;
-    state.position.y = THREE.MathUtils.lerp(state.position.y, targetY, Math.min(1, dt * 8));
+    // Fast-but-smooth vertical follow: quick enough that the car doesn't
+    // visibly sink below a rising slope (the old dt*8 rate lagged behind
+    // steep elevation changes), but still lerped for a touch of suspension
+    // give rather than a rigid snap. If something (a collision shove, a
+    // dropped frame) ever leaves it further than a wheel's radius below
+    // the road, snap up immediately instead of letting it lerp back from
+    // "inside" the ground.
+    state.position.y = THREE.MathUtils.lerp(state.position.y, targetY, Math.min(1, dt * 16));
+    if (state.position.y < targetY - 0.25) state.position.y = targetY;
   }
 
   state.collisionImpulse *= Math.max(0, 1 - dt * 4);

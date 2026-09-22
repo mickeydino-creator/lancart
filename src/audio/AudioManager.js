@@ -9,6 +9,9 @@ export class AudioManager {
     this.enabled = false;
     this.ctx = null;
     this._engineNodes = null;
+    this._roadNodes = null;
+    this._brakeCooldown = 0;
+    this._revPhase = Math.random() * Math.PI * 2;
   }
 
   /** Must be called from a user gesture (click/keypress) to satisfy autoplay policies. */
@@ -49,16 +52,28 @@ export class AudioManager {
     return buffer;
   }
 
+  _loopingNoiseSource(duration = 2) {
+    const src = this.ctx.createBufferSource();
+    src.buffer = this._noiseBuffer(duration);
+    src.loop = true;
+    return src;
+  }
+
   startEngine() {
     if (!this.enabled || this._engineNodes) return;
     const ctx = this.ctx;
 
     // Two slightly-detuned oscillators (saw + a low square "putter") through
     // a resonant lowpass reads as a much smoother, richer engine than a
-    // single raw sawtooth.
+    // single raw sawtooth. A third, very quiet detuned saw gives it a
+    // faint "chorus" so it doesn't read as a single static loop.
     const osc = ctx.createOscillator();
     osc.type = "sawtooth";
     osc.frequency.value = 60;
+    const osc2 = ctx.createOscillator();
+    osc2.type = "sawtooth";
+    osc2.frequency.value = 60;
+    osc2.detune.value = 9;
     const sub = ctx.createOscillator();
     sub.type = "square";
     sub.frequency.value = 30;
@@ -66,6 +81,8 @@ export class AudioManager {
 
     const oscGain = ctx.createGain();
     oscGain.gain.value = 0.75;
+    const osc2Gain = ctx.createGain();
+    osc2Gain.gain.value = 0.22;
     const subGain = ctx.createGain();
     subGain.gain.value = 0.35;
 
@@ -77,33 +94,119 @@ export class AudioManager {
     const gain = ctx.createGain();
     gain.gain.value = 0.0;
 
+    // A slow LFO on pitch gives the idle/cruise tone a subtle organic
+    // waver instead of a perfectly flat, "cheap synth loop" pitch.
+    const lfo = ctx.createOscillator();
+    lfo.type = "sine";
+    lfo.frequency.value = 5.5;
+    const lfoGain = ctx.createGain();
+    lfoGain.gain.value = 1.4;
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.detune);
+    lfoGain.connect(osc2.detune);
+    lfo.start();
+
     osc.connect(oscGain).connect(filter);
+    osc2.connect(osc2Gain).connect(filter);
     sub.connect(subGain).connect(filter);
     filter.connect(gain).connect(this.master);
     osc.start();
+    osc2.start();
     sub.start();
-    this._engineNodes = { osc, sub, gain, filter };
+    this._engineNodes = { osc, osc2, sub, gain, filter, lfo };
+
+    // Continuous tire/road rolling noise - a filtered noise bed whose
+    // level and brightness track speed, mixed low enough to sit under the
+    // engine rather than compete with it.
+    const roadSrc = this._loopingNoiseSource(2);
+    const roadFilter = ctx.createBiquadFilter();
+    roadFilter.type = "bandpass";
+    roadFilter.frequency.value = 500;
+    roadFilter.Q.value = 0.5;
+    const roadGain = ctx.createGain();
+    roadGain.gain.value = 0;
+    roadSrc.connect(roadFilter).connect(roadGain).connect(this.master);
+    roadSrc.start();
+    this._roadNodes = { src: roadSrc, filter: roadFilter, gain: roadGain };
   }
 
   stopEngine() {
     if (!this._engineNodes) return;
-    const { osc, sub, gain } = this._engineNodes;
-    gain.gain.setTargetAtTime(0, this.ctx.currentTime, 0.06);
-    osc.stop(this.ctx.currentTime + 0.25);
-    sub.stop(this.ctx.currentTime + 0.25);
+    const { osc, osc2, sub, gain, lfo } = this._engineNodes;
+    const t = this.ctx.currentTime;
+    gain.gain.setTargetAtTime(0, t, 0.06);
+    osc.stop(t + 0.25);
+    osc2.stop(t + 0.25);
+    sub.stop(t + 0.25);
+    lfo.stop(t + 0.25);
     this._engineNodes = null;
+
+    if (this._roadNodes) {
+      const { src, gain: roadGain } = this._roadNodes;
+      roadGain.gain.setTargetAtTime(0, t, 0.06);
+      src.stop(t + 0.25);
+      this._roadNodes = null;
+    }
   }
 
-  /** speedRatio 0..1, boosting bool */
-  updateEngine(speedRatio, boosting) {
+  /**
+   * speedRatio 0..1, boosting bool, throttle 0..1 (how hard the pedal is
+   * down right now), offRoad bool - drives engine pitch/tone, a light
+   * "rev" wobble under acceleration, and the underlying road/tire noise.
+   */
+  updateEngine(speedRatio, boosting, throttle = 0, offRoad = false) {
     if (!this.enabled || !this._engineNodes) return;
-    const { osc, sub, gain, filter } = this._engineNodes;
+    const { osc, osc2, sub, gain, filter } = this._engineNodes;
     const t = this.ctx.currentTime;
-    const freq = 55 + speedRatio * 190 + (boosting ? 70 : 0);
-    osc.frequency.setTargetAtTime(freq, t, 0.09);
-    sub.frequency.setTargetAtTime(freq * 0.5, t, 0.09);
-    filter.frequency.setTargetAtTime(450 + speedRatio * 2200 + (boosting ? 800 : 0), t, 0.09);
-    gain.gain.setTargetAtTime(0.1 + speedRatio * 0.11, t, 0.12);
+
+    // Under throttle the engine note rises a bit faster than road speed
+    // alone would suggest (revving against the gear) and brightens; off
+    // throttle it settles back - this is what reads as "connected to the
+    // road" rather than a single flat pitch-vs-speed mapping.
+    this._revPhase += 0.05 + throttle * 0.12;
+    const revWobble = Math.sin(this._revPhase) * throttle * 4;
+    const load = throttle * 26;
+
+    const freq = 55 + speedRatio * 190 + load + (boosting ? 70 : 0) + revWobble;
+    osc.frequency.setTargetAtTime(freq, t, 0.07);
+    osc2.frequency.setTargetAtTime(freq, t, 0.07);
+    sub.frequency.setTargetAtTime(freq * 0.5, t, 0.07);
+    filter.frequency.setTargetAtTime(450 + speedRatio * 2200 + load * 20 + (boosting ? 800 : 0), t, 0.09);
+    gain.gain.setTargetAtTime(0.1 + speedRatio * 0.11 + throttle * 0.02, t, 0.12);
+
+    if (this._roadNodes) {
+      const { filter: roadFilter, gain: roadGain } = this._roadNodes;
+      roadGain.gain.setTargetAtTime(speedRatio * (offRoad ? 0.05 : 0.03), t, 0.15);
+      roadFilter.frequency.setTargetAtTime(offRoad ? 260 : 700 + speedRatio * 600, t, 0.15);
+      roadFilter.Q.value = offRoad ? 0.3 : 0.6;
+    }
+  }
+
+  /** A short tire screech for hard braking at real speed - distinct from
+   * the drift tick's soft scuff. Rate-limited so it can't chatter. */
+  playBrakeScreech(intensity = 1) {
+    if (!this.enabled || this._brakeCooldown > 0) return;
+    this._brakeCooldown = 0.35;
+    const ctx = this.ctx;
+    const src = ctx.createBufferSource();
+    src.buffer = this._noiseBuffer(0.3);
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(1800, ctx.currentTime);
+    filter.frequency.exponentialRampToValueAtTime(1100, ctx.currentTime + 0.28);
+    filter.Q.value = 3;
+    const gain = ctx.createGain();
+    const peak = 0.18 * Math.min(1, Math.max(0.3, intensity));
+    gain.gain.setValueAtTime(0.001, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(peak, ctx.currentTime + 0.03);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+    src.connect(filter).connect(gain).connect(this.master);
+    src.start();
+  }
+
+  /** Called once per frame; decays the brake-screech cooldown. */
+  tick(dt) {
+    if (this._brakeCooldown > 0) this._brakeCooldown -= dt;
   }
 
   _tone({ freq = 440, type = "sine", duration = 0.15, gainValue = 0.3, sweepTo = null, attack = 0.005 }) {
