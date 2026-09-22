@@ -1,0 +1,315 @@
+import * as THREE from "three";
+import { Track } from "../world/Track.js";
+import { Kart } from "../entities/Kart.js";
+import { AIController } from "../entities/AIController.js";
+import { ChaseCamera } from "../camera/ChaseCamera.js";
+import { RaceManager } from "../race/RaceManager.js";
+import { InputManager } from "../input/InputManager.js";
+import { KeyboardController } from "../input/KeyboardController.js";
+import { AudioManager } from "../audio/AudioManager.js";
+import { PHYSICS, createKartState, stepKartPhysics, resolveKartCollisions } from "../physics/Physics.js";
+
+const AI_COLORS = [
+  ["#3fd1ff", "#0d1b26"],
+  ["#7effc1", "#0d2617"],
+  ["#c77dff", "#22093b"],
+  ["#ffb703", "#3b2400"],
+  ["#ff5d9e", "#3b0d24"],
+];
+const PLAYER_COLOR = ["#ff5d3b", "#ffd23f"];
+const TOTAL_LAPS = 3;
+const AI_COUNT = 5;
+
+function buildSkyTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createLinearGradient(0, 0, 0, 256);
+  grad.addColorStop(0, "#2a3a6b");
+  grad.addColorStop(0.35, "#7a6fb0");
+  grad.addColorStop(0.62, "#ff9d6c");
+  grad.addColorStop(0.8, "#ffd28a");
+  grad.addColorStop(1, "#ffe9b8");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 2, 256);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+export class Game {
+  constructor(canvas, ui) {
+    this.canvas = canvas;
+    this.ui = ui;
+    this.audio = new AudioManager();
+    this.initialized = false;
+    this.paused = false;
+    this.clock = new THREE.Clock();
+    this._prevCollisionImpulse = [];
+    this._driftTickTimer = 0;
+    this._prevBoosting = [];
+
+    this._onResize = this._onResize.bind(this);
+    this._loop = this._loop.bind(this);
+  }
+
+  init() {
+    if (this.initialized) return;
+    this.initialized = true;
+
+    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    this.scene = new THREE.Scene();
+    this.scene.fog = new THREE.Fog(0xffd28a, 140, 340);
+
+    const skyGeo = new THREE.SphereGeometry(450, 16, 16);
+    const skyMat = new THREE.MeshBasicMaterial({ map: buildSkyTexture(), side: THREE.BackSide, fog: false });
+    this.scene.add(new THREE.Mesh(skyGeo, skyMat));
+
+    this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1000);
+    this.chaseCamera = new ChaseCamera(this.camera);
+
+    const hemi = new THREE.HemisphereLight(0xffe9c7, 0x3a6b34, 0.7);
+    this.scene.add(hemi);
+    const sun = new THREE.DirectionalLight(0xffd9a0, 1.6);
+    sun.position.set(-80, 90, 40);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -140;
+    sun.shadow.camera.right = 140;
+    sun.shadow.camera.top = 140;
+    sun.shadow.camera.bottom = -140;
+    sun.shadow.camera.far = 300;
+    sun.shadow.bias = -0.0015;
+    this.scene.add(sun);
+    this.scene.add(sun.target);
+
+    this.track = new Track(this.scene);
+
+    this.kartCount = 1 + AI_COUNT;
+    this.playerIndex = 0;
+    this.karts = [];
+    this.states = [];
+    this.ai = [];
+
+    for (let i = 0; i < this.kartCount; i++) {
+      const isPlayer = i === this.playerIndex;
+      const [body, accent] = isPlayer ? PLAYER_COLOR : AI_COLORS[(i - 1) % AI_COLORS.length];
+      const kart = new Kart({ bodyColor: body, accentColor: accent, isPlayer });
+      kart.addToScene(this.scene);
+      this.karts.push(kart);
+
+      const grid = this.track.getGridPosition(i);
+      const state = createKartState(grid.position, grid.heading);
+      this.states.push(state);
+      this._prevCollisionImpulse.push(0);
+      this._prevBoosting.push(false);
+
+      const laneOffset = isPlayer ? 0 : ((i - 1) - (AI_COUNT - 1) / 2) * 2.2;
+      this.ai.push(
+        isPlayer ? null : new AIController(this.track, { skill: 0.86 + Math.random() * 0.22, laneOffset })
+      );
+    }
+
+    this.inputManager = new InputManager();
+    this.keyboard = new KeyboardController();
+    this.inputManager.addSource(this.keyboard);
+    this.inputManager.onPausePressed(() => this.togglePause());
+
+    this.raceManager = new RaceManager(this.track, this.kartCount, {
+      totalLaps: TOTAL_LAPS,
+      playerIndex: this.playerIndex,
+    });
+    this._wireRaceEvents();
+
+    window.addEventListener("resize", this._onResize);
+    this._onResize();
+
+    this.clock.start();
+    requestAnimationFrame(this._loop);
+  }
+
+  _wireRaceEvents() {
+    const rm = this.raceManager;
+    rm.onCountdownTick = (value) => {
+      this.ui.setCountdownValue(value);
+      this.audio.playCountdownBeep(value === "GO");
+      this._setStartLights(value);
+    };
+    rm.onGo = () => {
+      this.ui.hideCountdown();
+      this.audio.startEngine();
+    };
+    rm.onLapComplete = (kartIndex, lapNumber) => {
+      if (kartIndex === this.playerIndex && lapNumber < TOTAL_LAPS) {
+        this.ui.flashMessage(`LAP ${lapNumber + 1} / ${TOTAL_LAPS}`);
+        this.audio.playLapComplete();
+      }
+    };
+    rm.onFinish = (result) => {
+      this.audio.stopEngine();
+      this.audio.playFinish();
+      setTimeout(() => this.ui.showResults(result, TOTAL_LAPS), 1200);
+    };
+  }
+
+  _setStartLights(value) {
+    const lights = this.track.startLights;
+    if (!lights) return;
+    const litCount = value === "GO" ? 3 : value === 3 ? 1 : value === 2 ? 2 : value === 1 ? 3 : 0;
+    const color = value === "GO" ? "#2be05a" : "#ff2323";
+    for (let i = 0; i < lights.length; i++) {
+      const on = i < litCount;
+      lights[i].material.emissive.set(on ? color : "#2a0d0d");
+      lights[i].material.color.set(on ? color : "#2a0d0d");
+      lights[i].material.emissiveIntensity = on ? 1.6 : 0.2;
+    }
+    if (value === "GO") {
+      setTimeout(() => {
+        for (const l of lights) {
+          l.material.emissive.set("#1a1a1a");
+          l.material.color.set("#1a1a1a");
+        }
+      }, 900);
+    }
+  }
+
+  startRace() {
+    this.audio.init();
+    this.audio.resume();
+    if (!this.initialized) this.init();
+    this._resetPositions();
+    this.raceManager.reset();
+    this._setStartLights(3);
+    this.ui.showCountdown();
+    this.paused = false;
+  }
+
+  restartRace() {
+    this._resetPositions();
+    this.raceManager.reset();
+    this.audio.stopEngine();
+    this._setStartLights(3);
+    this.ui.hidePause();
+    this.ui.showCountdown();
+    this.paused = false;
+  }
+
+  _resetPositions() {
+    for (let i = 0; i < this.kartCount; i++) {
+      const grid = this.track.getGridPosition(i);
+      const fresh = createKartState(grid.position, grid.heading);
+      Object.assign(this.states[i], fresh);
+    }
+    this.chaseCamera._initialized = false;
+  }
+
+  togglePause() {
+    if (this.raceManager.state === "racing") {
+      this.raceManager.pause();
+      this.paused = true;
+      this.audio.stopEngine();
+      this.ui.showPause();
+    } else if (this.raceManager.state === "paused") {
+      this.resumeRace();
+    }
+  }
+
+  resumeRace() {
+    this.raceManager.resume();
+    this.paused = false;
+    this.audio.startEngine();
+    this.ui.hidePause();
+  }
+
+  quitToMenu() {
+    this.raceManager.state = "menu";
+    this.audio.stopEngine();
+    this.ui.hidePause();
+    this.ui.showMenu();
+  }
+
+  _onResize() {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w, h);
+  }
+
+  _loop() {
+    requestAnimationFrame(this._loop);
+    const dt = Math.min(this.clock.getDelta(), 0.05);
+
+    const rmState = this.raceManager.state;
+    if (rmState === "racing" || rmState === "countdown" || rmState === "paused") {
+      this.inputManager.update(dt);
+    }
+
+    if (rmState === "racing") {
+      this._stepPhysics(dt);
+    }
+
+    this.raceManager.update(dt, this.states);
+
+    if (this.raceManager.state === "racing" || this.raceManager.state === "countdown") {
+      this._updateHUD();
+    }
+
+    for (let i = 0; i < this.kartCount; i++) {
+      this.karts[i].updateVisual(this.states[i], dt);
+    }
+
+    this.chaseCamera.update(this.states[this.playerIndex], dt);
+    this.renderer.render(this.scene, this.camera);
+  }
+
+  _stepPhysics(dt) {
+    for (let i = 0; i < this.kartCount; i++) {
+      const state = this.states[i];
+      const input = i === this.playerIndex ? this.inputManager.get() : this.ai[i].computeInput(state);
+      stepKartPhysics(state, input, dt, this.track);
+    }
+    resolveKartCollisions(this.states);
+
+    const playerState = this.states[this.playerIndex];
+    if (playerState.collisionImpulse > this._prevCollisionImpulse[this.playerIndex] + 0.15) {
+      this.chaseCamera.shake(playerState.collisionImpulse * 0.7, 0.22);
+      this.audio.playCollision();
+    }
+    if (playerState.isBoosting && !this._prevBoosting[this.playerIndex]) {
+      this.chaseCamera.shake(0.15, 0.15);
+      this.audio.playBoost();
+    }
+    this._prevCollisionImpulse[this.playerIndex] = playerState.collisionImpulse;
+    this._prevBoosting[this.playerIndex] = playerState.isBoosting;
+
+    this._driftTickTimer -= dt;
+    if (playerState.isDrifting && this._driftTickTimer <= 0) {
+      this.audio.playDriftTick();
+      this._driftTickTimer = 0.14;
+    }
+
+    const speedRatio = Math.min(1, Math.abs(playerState.speed) / PHYSICS.maxSpeed);
+    this.audio.updateEngine(speedRatio, playerState.isBoosting);
+  }
+
+  _updateHUD() {
+    const state = this.states[this.playerIndex];
+    this.ui.updateHUD({
+      lap: this.raceManager.getPlayerLap(),
+      totalLaps: TOTAL_LAPS,
+      position: this.raceManager.getPlayerPosition(),
+      elapsed: this.raceManager.elapsed,
+      speedKmh: Math.abs(state.speed) * 3.6,
+      drifting: state.isDrifting,
+      boostLevel: state.driftBoostLevel,
+      boostFuel: state.manualBoostFuel,
+    });
+  }
+}
