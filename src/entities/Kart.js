@@ -124,7 +124,12 @@ export class Kart {
   /** Sync visuals with a physics state object each frame. */
   updateVisual(state, dt) {
     this.root.position.copy(state.position);
-    this.root.quaternion.setFromEuler(new THREE.Euler(0, state.heading, 0));
+    // Movement integrates along dir = (sin(heading), 0, cos(heading)) (see
+    // Physics.js). A plain Euler(0, heading, 0) rotation points the model's
+    // local -Z ("nose", per KART_YAW above) at -dir instead of +dir, so the
+    // kart visually drives backward; the extra PI corrects that without
+    // touching the camera or physics, which already assume nose = dir.
+    this.root.quaternion.setFromEuler(new THREE.Euler(0, state.heading + Math.PI, 0));
 
     // suspension pitch based on acceleration, roll based on turning
     const targetTilt = THREE.MathUtils.clamp(-state.forwardAccel * 0.02, -0.12, 0.12);

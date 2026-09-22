@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { cloneScene } from "../assets/AssetLoader.js";
 
 // Waypoints for "Sunset Circuit": long straight, hill climb, sweeping curves,
@@ -51,6 +52,39 @@ function sampleTrack(curve) {
   }
   samples.totalLength = cumulative + raw[0].distanceTo(raw[raw.length - 1]);
   return samples;
+}
+
+// --- Shared ground elevation -----------------------------------------------
+//
+// Both the ground mesh AND every decoration placed on it need to agree on
+// "how high is the terrain at this (x,z) point" - otherwise decorations
+// scattered near an elevated stretch of road end up floating above a flat
+// ground plane that never rises to meet them (the flat plane used to be
+// the only source of ground height, entirely independent of the track's
+// own elevation, which is what produced both the floating-road-on-a-cliff
+// look and floating trees/rocks near the hill climb).
+
+const GROUND_BASE_Y = -0.12;
+const ELEVATION_INFLUENCE_RADIUS = 42;
+const ELEVATION_SAMPLE_STRIDE = 4;
+
+function groundElevationAt(x, z, samples) {
+  let bestDistSq = Infinity;
+  let bestElevation = 0;
+  for (let i = 0; i < samples.length; i += ELEVATION_SAMPLE_STRIDE) {
+    const p = samples[i].position;
+    const dx = p.x - x;
+    const dz = p.z - z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestDistSq) {
+      bestDistSq = d2;
+      bestElevation = p.y;
+    }
+  }
+  const d = Math.sqrt(bestDistSq);
+  const t = THREE.MathUtils.clamp(1 - d / ELEVATION_INFLUENCE_RADIUS, 0, 1);
+  const smooth = t * t * (3 - 2 * t);
+  return bestElevation * smooth + GROUND_BASE_Y;
 }
 
 // --- Textures ----------------------------------------------------------------
@@ -267,18 +301,57 @@ function buildStartFinishStripe(samples) {
   return mesh;
 }
 
-function buildGround(curve) {
+/**
+ * The ground is a subdivided grid whose vertices follow the track's own
+ * elevation near the road (via groundElevationAt), blending down to a flat
+ * plain far away. This is what makes an elevated stretch of road (the hill
+ * climb) sit on a proper sloped hillside instead of floating in mid-air
+ * over flat grass with a visible gap underneath - the single biggest
+ * source of "floating" complaints (both the road itself and every
+ * decoration placed near it).
+ */
+function buildGround(curve, samples) {
   const box = new THREE.Box3().setFromPoints(curve.getPoints(200));
   const size = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) + 260;
-  const geometry = new THREE.PlaneGeometry(size, size, 1, 1);
+  const center = new THREE.Vector3((box.max.x + box.min.x) / 2, 0, (box.max.z + box.min.z) / 2);
+
+  const segs = 56;
+  const positions = [];
+  const uvs = [];
+  const indices = [];
+  const half = size / 2;
+  for (let gz = 0; gz <= segs; gz++) {
+    for (let gx = 0; gx <= segs; gx++) {
+      const x = center.x - half + (gx / segs) * size;
+      const z = center.z - half + (gz / segs) * size;
+      const y = groundElevationAt(x, z, samples);
+      positions.push(x, y, z);
+      uvs.push((x / 14) % 1000, (z / 14) % 1000);
+    }
+  }
+  const cols = segs + 1;
+  for (let gz = 0; gz < segs; gz++) {
+    for (let gx = 0; gx < segs; gx++) {
+      const a = gz * cols + gx;
+      const b = a + 1;
+      const c = a + cols;
+      const d = c + 1;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+
   const tex = grassTexture();
-  tex.repeat.set(size / 14, size / 14);
+  tex.repeat.set(1, 1); // uvs already carry world-space tiling
   const material = new THREE.MeshStandardMaterial({ map: tex, roughness: 1 });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set((box.max.x + box.min.x) / 2, -0.05, (box.max.z + box.min.z) / 2);
   mesh.receiveShadow = true;
-  return { mesh, center: mesh.position.clone(), size };
+  return { mesh, center, size };
 }
 
 // --- Barriers ------------------------------------------------------------------
@@ -360,109 +433,125 @@ function buildBarriers(samples) {
   return group;
 }
 
-// --- Decorations -----------------------------------------------------------------
+// --- Instancing helper -----------------------------------------------------------
 
-function makeTreeGeometry(variant) {
-  const group = new THREE.Group();
-  const hue = 0.32 + Math.random() * 0.06;
-  const trunkMat = new THREE.MeshStandardMaterial({ color: "#6b4423", roughness: 1 });
-  const leafColorA = new THREE.Color().setHSL(hue, 0.45, 0.32);
-  const leafColorB = new THREE.Color().setHSL(hue, 0.5, 0.4);
-  const leafMatA = new THREE.MeshStandardMaterial({ color: leafColorA, roughness: 0.9, flatShading: true });
-  const leafMatB = new THREE.MeshStandardMaterial({ color: leafColorB, roughness: 0.9, flatShading: true });
-
-  if (variant === "round") {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1.6, 6), trunkMat);
-    trunk.position.y = 0.8;
-    group.add(trunk);
-    const blobs = [
-      [0, 2.3, 0, 1.15],
-      [0.55, 2.0, 0.2, 0.8],
-      [-0.5, 2.05, -0.25, 0.85],
-      [0.1, 2.75, -0.3, 0.75],
-    ];
-    for (const [x, y, z, r] of blobs) {
-      const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), Math.random() > 0.5 ? leafMatA : leafMatB);
-      blob.position.set(x, y, z);
-      group.add(blob);
-    }
-  } else {
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 2, 6), trunkMat);
-    trunk.position.y = 1;
-    const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.5, 3, 8), leafMatA);
-    leaves.position.y = 3.1;
-    const leaves2 = new THREE.Mesh(new THREE.ConeGeometry(1.1, 2.2, 8), leafMatB);
-    leaves2.position.y = 4.3;
-    const leaves3 = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.5, 8), leafMatA);
-    leaves3.position.y = 5.3;
-    group.add(trunk, leaves, leaves2, leaves3);
+/**
+ * Accumulates placements (matrix + optional per-instance color) for a single
+ * geometry+material pair, then bakes them into one InstancedMesh - one draw
+ * call for however many copies were placed, instead of one mesh per copy.
+ */
+class InstanceBatch {
+  constructor(geometry, material, { useColor = false } = {}) {
+    this.geometry = geometry;
+    this.material = material;
+    this.useColor = useColor;
+    this.matrices = [];
+    this.colors = [];
   }
 
-  group.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
-  });
-  return group;
-}
-
-function makeBushGeometry() {
-  const group = new THREE.Group();
-  const hue = 0.3 + Math.random() * 0.05;
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color().setHSL(hue, 0.4, 0.34),
-    roughness: 0.95,
-    flatShading: true,
-  });
-  for (let i = 0; i < 3; i++) {
-    const r = 0.45 + Math.random() * 0.35;
-    const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
-    blob.position.set((Math.random() - 0.5) * 0.6, r * 0.7, (Math.random() - 0.5) * 0.6);
-    group.add(blob);
+  add(position, quaternion, scale, color) {
+    this.matrices.push(new THREE.Matrix4().compose(position, quaternion, scale));
+    if (this.useColor) this.colors.push(color ?? new THREE.Color(1, 1, 1));
   }
-  group.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
+
+  build({ castShadow = true, receiveShadow = true } = {}) {
+    if (this.matrices.length === 0) return null;
+    const mesh = new THREE.InstancedMesh(this.geometry, this.material, this.matrices.length);
+    mesh.castShadow = castShadow;
+    mesh.receiveShadow = receiveShadow;
+    for (let i = 0; i < this.matrices.length; i++) {
+      mesh.setMatrixAt(i, this.matrices[i]);
+      if (this.useColor) mesh.setColorAt(i, this.colors[i]);
     }
-  });
-  return group;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    return mesh;
+  }
 }
 
-function makeRockGeometry() {
-  const group = new THREE.Group();
-  const shade = 0.5 + Math.random() * 0.12;
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(shade * 0.55, shade * 0.53, shade * 0.5),
-    flatShading: true,
-    roughness: 1,
+const UP = new THREE.Vector3(0, 1, 0);
+const IDENTITY_Q = new THREE.Quaternion();
+const _q = new THREE.Quaternion();
+const _scale = new THREE.Vector3();
+
+// --- Decoration geometry templates (built once, instanced many times) ----------
+
+/** Merges a tree's trunk+leaf meshes into a single geometry with baked
+ * vertex colors, so every placement of this variant is one instance of one
+ * draw call instead of several separate meshes. */
+function buildRoundTreeGeometry() {
+  const trunkColor = new THREE.Color("#6b4423");
+  const leafColorA = new THREE.Color().setHSL(0.34, 0.48, 0.34);
+  const leafColorB = new THREE.Color().setHSL(0.35, 0.5, 0.4);
+
+  // mergeGeometries requires every part to agree on indexed-vs-not;
+  // Cylinder/Icosahedron geometries don't, so normalize them all first.
+  const parts = [];
+  const trunk = new THREE.CylinderGeometry(0.22, 0.3, 1.6, 6).toNonIndexed();
+  trunk.translate(0, 0.8, 0);
+  paintVertexColor(trunk, trunkColor);
+  parts.push(trunk);
+
+  const blobs = [
+    [0, 2.3, 0, 1.15, leafColorA],
+    [0.55, 2.0, 0.2, 0.8, leafColorB],
+    [-0.5, 2.05, -0.25, 0.85, leafColorA],
+    [0.1, 2.75, -0.3, 0.75, leafColorB],
+  ];
+  for (const [x, y, z, r, color] of blobs) {
+    const blob = new THREE.IcosahedronGeometry(r, 1).toNonIndexed();
+    blob.translate(x, y, z);
+    paintVertexColor(blob, color);
+    parts.push(blob);
+  }
+  return mergeGeometries(parts, false);
+}
+
+function buildBushGeometry() {
+  const color = new THREE.Color().setHSL(0.32, 0.4, 0.34);
+  const offsets = [
+    [-0.2, 0.32, 0.15, 0.55],
+    [0.22, 0.3, -0.1, 0.5],
+    [0, 0.4, -0.2, 0.42],
+  ];
+  const parts = offsets.map(([x, y, z, r]) => {
+    const geo = new THREE.IcosahedronGeometry(r, 0).toNonIndexed();
+    geo.translate(x, y, z);
+    return geo;
   });
-  const count = 1 + Math.floor(Math.random() * 3);
+  const merged = mergeGeometries(parts, false);
+  paintVertexColor(merged, color);
+  return merged;
+}
+
+function buildRockGeometry() {
+  const offsets = [
+    [-0.2, 0.42, 0.1, 0.62, 0.75],
+    [0.28, 0.34, -0.18, 0.48, 1.0],
+  ];
+  const parts = offsets.map(([x, y, z, r, yScale]) => {
+    const geo = new THREE.IcosahedronGeometry(r, 0).toNonIndexed();
+    geo.scale(1, yScale, 1);
+    geo.translate(x, y * yScale, z);
+    return geo;
+  });
+  const merged = mergeGeometries(parts, false);
+  paintVertexColor(merged, new THREE.Color("#8d8a83"));
+  return merged;
+}
+
+function paintVertexColor(geometry, color) {
+  const count = geometry.attributes.position.count;
+  const colors = new Float32Array(count * 3);
   for (let i = 0; i < count; i++) {
-    const r = 0.5 + Math.random() * 0.6;
-    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
-    rock.position.set((Math.random() - 0.5) * 0.9, r * 0.55, (Math.random() - 0.5) * 0.9);
-    rock.rotation.set(Math.random(), Math.random(), Math.random());
-    rock.scale.y = 0.7 + Math.random() * 0.4;
-    group.add(rock);
+    colors[i * 3] = color.r;
+    colors[i * 3 + 1] = color.g;
+    colors[i * 3 + 2] = color.b;
   }
-  group.traverse((o) => {
-    if (o.isMesh) {
-      o.castShadow = true;
-      o.receiveShadow = true;
-    }
-  });
-  return group;
+  geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
 }
 
-function makeSignGeometry(text) {
-  const group = new THREE.Group();
-  const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.07, 0.07, 2.6, 6),
-    new THREE.MeshStandardMaterial({ color: "#cfd2d6", metalness: 0.4, roughness: 0.5 })
-  );
-  pole.position.y = 1.3;
+function makeSignBoardTexture(text) {
   const canvas = document.createElement("canvas");
   canvas.width = 128;
   canvas.height = 64;
@@ -477,55 +566,17 @@ function makeSignGeometry(text) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, 64, 34);
-  const tex = new THREE.CanvasTexture(canvas);
-  const board = new THREE.Mesh(
-    new THREE.PlaneGeometry(1.6, 0.8),
-    new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.6 })
-  );
-  board.position.y = 2.3;
-  group.add(pole, board);
-  group.traverse((o) => {
-    if (o.isMesh) o.castShadow = true;
-  });
-  return group;
+  return new THREE.CanvasTexture(canvas);
 }
 
-// Source models are authored at arbitrary unit scales; these bring them to
-// real-world tree heights (~4-6m) matching the procedural fallbacks.
-const PINE_GLB_SCALE = 0.0108;
-const COCONUT_GLB_SCALE = 0.9;
-
-function makeGlbTree(kind, treeAssets) {
-  if (kind === "pine" && treeAssets?.pineGltf) {
-    const obj = cloneScene(treeAssets.pineGltf);
-    obj.scale.setScalar(PINE_GLB_SCALE);
-    obj.traverse((o) => {
-      if (o.isMesh) {
-        o.castShadow = true;
-        o.receiveShadow = true;
-      }
-    });
-    return obj;
-  }
-  if (kind === "coconut" && treeAssets?.coconutGltf) {
-    const obj = cloneScene(treeAssets.coconutGltf);
-    obj.scale.setScalar(COCONUT_GLB_SCALE);
-    obj.traverse((o) => {
-      if (o.isMesh) {
-        o.castShadow = true;
-        o.receiveShadow = true;
-      }
-    });
-    return obj;
-  }
-  return null;
-}
-
+/**
+ * Scatters trees/rocks/bushes/signs along the track. All repeated geometry
+ * (trees, rocks, bushes, GLB tree models, sign posts) is batched into a
+ * handful of InstancedMesh draw calls via InstanceBatch instead of one mesh
+ * per placement, which is what previously produced hundreds of draw calls
+ * and unique materials for a few hundred simple props.
+ */
 function scatterDecorations(scene, samples, treeAssets) {
-  const group = new THREE.Group();
-  group.name = "decorations";
-  const signTexts = ["TURN", "SLOW", "GO!", "50m"];
-  let signIdx = 0;
   const startPos = samples[0].position;
   // The track's closing curve loops back close to the start straight in
   // world space even though it's "far away" by arc-length index, so the
@@ -533,6 +584,50 @@ function scatterDecorations(scene, samples, treeAssets) {
   // index range - otherwise decorations from that curve end up right next
   // to the starting grid and camera.
   const startClearance = 34;
+
+  const pineGeo = extractFirstMeshGeometry(treeAssets?.pineGltf);
+  const coconutGeo = extractFirstMeshGeometry(treeAssets?.coconutGltf);
+  const PINE_GLB_SCALE = 0.0108;
+  const COCONUT_GLB_SCALE = 0.9;
+
+  const pineMat = pineGeo
+    ? new THREE.MeshStandardMaterial({ map: pineGeo.map, roughness: 0.9 })
+    : null;
+  const coconutMat = coconutGeo
+    ? new THREE.MeshStandardMaterial({ map: coconutGeo.map, roughness: 0.9 })
+    : null;
+  const roundTreeMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.9, flatShading: true });
+  const rockMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 1 });
+  const bushMat = new THREE.MeshStandardMaterial({ vertexColors: true, flatShading: true, roughness: 0.95 });
+  const signPoleMat = new THREE.MeshStandardMaterial({ color: "#cfd2d6", metalness: 0.4, roughness: 0.5 });
+
+  const batches = {
+    pine: pineGeo ? new InstanceBatch(pineGeo.geometry, pineMat) : null,
+    coconut: coconutGeo ? new InstanceBatch(coconutGeo.geometry, coconutMat) : null,
+    roundTree: new InstanceBatch(buildRoundTreeGeometry(), roundTreeMat, { useColor: true }),
+    rock: new InstanceBatch(buildRockGeometry(), rockMat, { useColor: true }),
+    bush: new InstanceBatch(buildBushGeometry(), bushMat, { useColor: true }),
+    signPole: new InstanceBatch(new THREE.CylinderGeometry(0.07, 0.07, 2.6, 6), signPoleMat),
+  };
+  const signBoardGeo = new THREE.PlaneGeometry(1.6, 0.8);
+  const signTexts = ["TURN", "SLOW", "GO!", "50m"];
+  const signBatches = new Map(
+    signTexts.map((text) => [
+      text,
+      new InstanceBatch(
+        signBoardGeo,
+        new THREE.MeshStandardMaterial({ map: makeSignBoardTexture(text), side: THREE.DoubleSide, roughness: 0.6 }),
+      ),
+    ])
+  );
+  let signIdx = 0;
+
+  const whiteColor = new THREE.Color(1, 1, 1);
+  const rockShade = () => {
+    const s = 0.75 + Math.random() * 0.4;
+    return new THREE.Color(s * 0.55, s * 0.53, s * 0.5).multiplyScalar(1.5);
+  };
+  const bushShade = () => new THREE.Color().setHSL(0.3 + Math.random() * 0.06, 1, 1).lerp(whiteColor, 0.15);
 
   for (let i = 0; i < samples.length; i += 4) {
     const s = samples[i];
@@ -542,42 +637,84 @@ function scatterDecorations(scene, samples, treeAssets) {
       if (Math.random() < 0.3) continue; // leave gaps, avoid a wall of props
       const dist = 4.5 + Math.random() * 11;
       const pos = s.position.clone().addScaledVector(s.right, side * (ROAD_WIDTH / 2 + dist));
+      pos.y = groundElevationAt(pos.x, pos.z, samples);
       const roll = Math.random();
-      let obj;
-      if (roll < 0.34) {
-        obj = makeGlbTree("pine", treeAssets) ?? makeTreeGeometry("pine");
-        obj.rotation.y = Math.random() * Math.PI * 2;
-        obj.scale.multiplyScalar(0.85 + Math.random() * 0.35);
-      } else if (roll < 0.44) {
-        obj = makeGlbTree("coconut", treeAssets) ?? makeTreeGeometry("round");
-        obj.rotation.y = Math.random() * Math.PI * 2;
-        obj.scale.multiplyScalar(0.8 + Math.random() * 0.3);
+
+      if (roll < 0.34 && batches.pine) {
+        _q.setFromAxisAngle(UP, Math.random() * Math.PI * 2);
+        const sc = PINE_GLB_SCALE * (0.85 + Math.random() * 0.35);
+        batches.pine.add(pos, _q.clone(), _scale.set(sc, sc, sc).clone());
+      } else if (roll < 0.44 && batches.coconut) {
+        _q.setFromAxisAngle(UP, Math.random() * Math.PI * 2);
+        const sc = COCONUT_GLB_SCALE * (0.8 + Math.random() * 0.3);
+        batches.coconut.add(pos, _q.clone(), _scale.set(sc, sc, sc).clone());
       } else if (roll < 0.58) {
-        obj = makeTreeGeometry("round");
-        obj.scale.setScalar(0.85 + Math.random() * 0.5);
+        _q.setFromAxisAngle(UP, Math.random() * Math.PI * 2);
+        const sc = 0.85 + Math.random() * 0.5;
+        batches.roundTree.add(pos, _q.clone(), _scale.set(sc, sc, sc).clone(), whiteColor);
       } else if (roll < 0.78) {
-        obj = makeRockGeometry();
-        const scale = 0.6 + Math.random() * 1.0;
-        obj.scale.set(scale, scale * 0.8, scale);
-        obj.rotation.y = Math.random() * Math.PI;
+        _q.setFromAxisAngle(UP, Math.random() * Math.PI);
+        const sc = 0.6 + Math.random() * 1.0;
+        batches.rock.add(pos, _q.clone(), _scale.set(sc, sc * 0.8, sc).clone(), rockShade());
       } else if (roll < 0.92) {
-        obj = makeBushGeometry();
+        _q.identity();
+        const sc = 0.8 + Math.random() * 0.5;
+        batches.bush.add(pos, _q.clone(), _scale.set(sc, sc, sc).clone(), bushShade());
       } else {
-        obj = makeSignGeometry(signTexts[signIdx % signTexts.length]);
+        const text = signTexts[signIdx % signTexts.length];
         signIdx++;
-        obj.rotation.y = Math.atan2(s.tangent.x, s.tangent.z) + (side > 0 ? Math.PI : 0);
+        const yaw = Math.atan2(s.tangent.x, s.tangent.z) + (side > 0 ? Math.PI : 0);
+        _q.setFromAxisAngle(UP, yaw);
+        const polePos = pos.clone();
+        polePos.y += 1.3;
+        batches.signPole.add(polePos, _q.clone(), _scale.set(1, 1, 1).clone());
+        const boardPos = pos.clone();
+        boardPos.y += 2.3;
+        signBatches.get(text).add(boardPos, _q.clone(), _scale.set(1, 1, 1).clone());
       }
-      obj.position.copy(pos);
-      group.add(obj);
     }
+  }
+
+  const group = new THREE.Group();
+  group.name = "decorations";
+  for (const batch of Object.values(batches)) {
+    const mesh = batch?.build();
+    if (mesh) group.add(mesh);
+  }
+  for (const batch of signBatches.values()) {
+    const mesh = batch.build();
+    if (mesh) group.add(mesh);
   }
   scene.add(group);
   return group;
 }
 
-/** Distant low-poly mountain silhouettes ringing the track for a non-empty horizon. */
-function buildMountains(center, trackRadius) {
-  const group = new THREE.Group();
+/** Pulls the geometry + base color texture out of a loaded static (non-skinned)
+ * GLB so it can be driven through an InstancedMesh instead of cloning the
+ * whole scene graph per placement. */
+function extractFirstMeshGeometry(gltf) {
+  if (!gltf) return null;
+  let found = null;
+  gltf.scene.traverse((o) => {
+    if (!found && o.isMesh) found = o;
+  });
+  if (!found) return null;
+  return { geometry: found.geometry, map: found.material?.map ?? null };
+}
+
+/** Distant low-poly mountain silhouettes ringing the track for a non-empty
+ * horizon - one InstancedMesh (+ one for the snow caps) instead of a
+ * separate mesh per mountain. */
+function buildMountains(center, trackRadius, samples) {
+  const coneGeo = new THREE.ConeGeometry(1, 1, 5);
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, flatShading: true, fog: true });
+  paintVertexColor(coneGeo, new THREE.Color(1, 1, 1));
+  const batch = new InstanceBatch(coneGeo, mat, { useColor: true });
+
+  const capGeo = new THREE.ConeGeometry(1, 1, 5);
+  const capMat = new THREE.MeshStandardMaterial({ color: "#eef3f7", roughness: 1, flatShading: true, fog: true });
+  const capBatch = new InstanceBatch(capGeo, capMat);
+
   const ringRadius = trackRadius + 140;
   const count = 26;
   for (let i = 0; i < count; i++) {
@@ -587,57 +724,58 @@ function buildMountains(center, trackRadius) {
     const radius = 28 + Math.random() * 30;
     const hue = 0.66 + Math.random() * 0.05;
     const light = 0.42 + (height / 85) * 0.18;
-    const mat = new THREE.MeshStandardMaterial({
-      color: new THREE.Color().setHSL(hue, 0.22, light),
-      roughness: 1,
-      flatShading: true,
-      fog: true,
-    });
-    const mountain = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 5), mat);
-    mountain.position.set(center.x + Math.cos(angle) * dist, height / 2 - 4, center.z + Math.sin(angle) * dist);
-    mountain.rotation.y = Math.random() * Math.PI;
-    // faint snow cap using scaled cap trick: a small lighter cone at the peak
+    const x = center.x + Math.cos(angle) * dist;
+    const z = center.z + Math.sin(angle) * dist;
+    const y = groundElevationAt(x, z, samples) + height / 2 - 4;
+    const pos = new THREE.Vector3(x, y, z);
+    _q.setFromAxisAngle(UP, Math.random() * Math.PI);
+    batch.add(pos, _q.clone(), _scale.set(radius, height, radius).clone(), new THREE.Color().setHSL(hue, 0.22, light));
+
     if (height > 55) {
-      const cap = new THREE.Mesh(
-        new THREE.ConeGeometry(radius * 0.38, height * 0.32, 5),
-        new THREE.MeshStandardMaterial({ color: "#eef3f7", roughness: 1, flatShading: true, fog: true })
-      );
-      cap.position.y = height / 2 - height * 0.14;
-      mountain.add(cap);
+      const capPos = pos.clone();
+      capPos.y = y + height / 2 - height * 0.14;
+      capBatch.add(capPos, _q.clone(), _scale.set(radius * 0.38, height * 0.32, radius * 0.38).clone());
     }
-    group.add(mountain);
   }
+
+  const group = new THREE.Group();
+  const mountainMesh = batch.build({ castShadow: false, receiveShadow: false });
+  if (mountainMesh) group.add(mountainMesh);
+  const capMesh = capBatch.build({ castShadow: false, receiveShadow: false });
+  if (capMesh) group.add(capMesh);
   return group;
 }
 
 /** Scattered rolling-hill terrain chunks between the trackside decorations
  * and the distant mountains - fills the mid-ground so the world doesn't
- * jump straight from flat grass to a mountain wall. Purely decorative,
- * tinted to match the grass palette since the source asset has no texture. */
-function buildTerrainHills(center, trackRadius, terrainGltf) {
-  const group = new THREE.Group();
+ * jump straight from flat grass to a mountain wall. One InstancedMesh
+ * (tinted per-instance) instead of a cloned mesh+material per hill. */
+function buildTerrainHills(center, trackRadius, terrainGltf, samples) {
+  const extracted = extractFirstMeshGeometry(terrainGltf);
+  if (!extracted) return null;
+  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85 });
+  if (!extracted.geometry.attributes.color) paintVertexColor(extracted.geometry, new THREE.Color(1, 1, 1));
+  const batch = new InstanceBatch(extracted.geometry, mat, { useColor: true });
+
   const ringRadius = trackRadius + 55;
   const count = 10;
   for (let i = 0; i < count; i++) {
     const angle = (i / count) * Math.PI * 2 + Math.random() * 0.3;
     const dist = ringRadius + Math.random() * 55;
-    const hill = cloneScene(terrainGltf);
     const hue = 0.28 + Math.random() * 0.05;
-    hill.traverse((o) => {
-      if (o.isMesh) {
-        o.material = o.material.clone();
-        o.material.color.setHSL(hue, 0.35, 0.4 + Math.random() * 0.1);
-        o.castShadow = true;
-        o.receiveShadow = true;
-      }
-    });
     const scale = 2.2 + Math.random() * 2.5;
-    hill.scale.setScalar(scale);
-    hill.rotation.y = Math.random() * Math.PI * 2;
-    hill.position.set(center.x + Math.cos(angle) * dist, -0.3, center.z + Math.sin(angle) * dist);
-    group.add(hill);
+    const x = center.x + Math.cos(angle) * dist;
+    const z = center.z + Math.sin(angle) * dist;
+    const y = groundElevationAt(x, z, samples) + 0.1;
+    _q.setFromAxisAngle(UP, Math.random() * Math.PI * 2);
+    batch.add(
+      new THREE.Vector3(x, y, z),
+      _q.clone(),
+      _scale.set(scale, scale, scale).clone(),
+      new THREE.Color().setHSL(hue, 0.35, 0.4 + Math.random() * 0.1)
+    );
   }
-  return group;
+  return batch.build();
 }
 
 function buildStartLights(samples) {
@@ -708,11 +846,21 @@ function buildStartLights(samples) {
 }
 
 /** A slim arch with a colored flag panel at each checkpoint - a visual
- * landmark so players can tell where they are on the loop at a glance. */
+ * landmark so players can tell where they are on the loop at a glance.
+ * Posts share one InstancedMesh (identical geometry everywhere); flags
+ * share another, tinted per-instance since each checkpoint's hue differs. */
 function buildCheckpointArches(samples, checkpoints) {
-  const group = new THREE.Group();
   const half = ROAD_WIDTH / 2;
-  const postMat = new THREE.MeshStandardMaterial({ color: "#e8e8e8", roughness: 0.5, metalness: 0.3 });
+  const postBatch = new InstanceBatch(
+    new THREE.CylinderGeometry(0.12, 0.14, 4.6, 7),
+    new THREE.MeshStandardMaterial({ color: "#e8e8e8", roughness: 0.5, metalness: 0.3 })
+  );
+  const flagBatch = new InstanceBatch(
+    new THREE.PlaneGeometry(1.1, 0.6),
+    new THREE.MeshStandardMaterial({ roughness: 0.5, side: THREE.DoubleSide, vertexColors: true }),
+    { useColor: true }
+  );
+  paintVertexColor(flagBatch.geometry, new THREE.Color(1, 1, 1));
 
   for (const cp of checkpoints) {
     if (cp.index === 0) continue; // start/finish already has its own gantry
@@ -721,22 +869,23 @@ function buildCheckpointArches(samples, checkpoints) {
     const flagColor = new THREE.Color().setHSL(hue, 0.65, 0.55);
 
     for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 4.6, 7), postMat);
-      post.position.copy(s.position).addScaledVector(s.right, side * (half + 0.4));
-      post.position.y += 2.3;
-      post.castShadow = true;
-      group.add(post);
+      const pos = s.position.clone().addScaledVector(s.right, side * (half + 0.4));
+      pos.y += 2.3;
+      postBatch.add(pos, IDENTITY_Q, _scale.set(1, 1, 1).clone());
     }
 
-    const flagMat = new THREE.MeshStandardMaterial({ color: flagColor, roughness: 0.5, side: THREE.DoubleSide });
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.6), flagMat);
-    flag.position.copy(s.position).addScaledVector(s.right, half + 0.4);
-    flag.position.y += 4.2;
+    const flagPos = s.position.clone().addScaledVector(s.right, half + 0.4);
+    flagPos.y += 4.2;
     const basis = new THREE.Matrix4().makeBasis(s.tangent, new THREE.Vector3(0, 1, 0), s.right);
-    flag.quaternion.setFromRotationMatrix(basis);
-    flag.castShadow = true;
-    group.add(flag);
+    _q.setFromRotationMatrix(basis);
+    flagBatch.add(flagPos, _q.clone(), _scale.set(1, 1, 1).clone(), flagColor);
   }
+
+  const group = new THREE.Group();
+  const postMesh = postBatch.build();
+  if (postMesh) group.add(postMesh);
+  const flagMesh = flagBatch.build();
+  if (flagMesh) group.add(flagMesh);
   return group;
 }
 
@@ -777,10 +926,10 @@ function chevronBoardTexture(direction) {
 /**
  * Chevron "turn direction" boards on the outside edge of sharp corners -
  * the same visual language real circuits use so the route is obvious from
- * the 3D scene itself, not just the HUD.
+ * the 3D scene itself, not just the HUD. Boards batch into two
+ * InstancedMeshes (one per chevron direction); posts share a third.
  */
 function buildTurnArrows(samples) {
-  const group = new THREE.Group();
   const n = samples.length;
   const window = 9;
 
@@ -798,7 +947,20 @@ function buildTurnArrows(samples) {
   const minSpacing = 22;
   let lastPick = -1000;
   const half = ROAD_WIDTH / 2;
-  const postMat = new THREE.MeshStandardMaterial({ color: "#2a2e35", roughness: 0.6, metalness: 0.3 });
+
+  const boardGeo = new THREE.PlaneGeometry(1.7, 1.2);
+  const rightBatch = new InstanceBatch(
+    boardGeo,
+    new THREE.MeshStandardMaterial({ map: chevronBoardTexture(1), roughness: 0.55, side: THREE.DoubleSide })
+  );
+  const leftBatch = new InstanceBatch(
+    boardGeo,
+    new THREE.MeshStandardMaterial({ map: chevronBoardTexture(-1), roughness: 0.55, side: THREE.DoubleSide })
+  );
+  const postBatch = new InstanceBatch(
+    new THREE.CylinderGeometry(0.07, 0.08, 1.5, 6),
+    new THREE.MeshStandardMaterial({ color: "#2a2e35", roughness: 0.6, metalness: 0.3 })
+  );
 
   for (let i = 0; i < n; i++) {
     const mag = Math.abs(bend[i]);
@@ -813,23 +975,21 @@ function buildTurnArrows(samples) {
     const turnsPositive = bend[i] > 0;
     const outsideSide = turnsPositive ? -1 : 1; // outside is opposite the bend direction
     const s = samples[i];
-    const board = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.2), new THREE.MeshStandardMaterial({
-      map: chevronBoardTexture(turnsPositive ? 1 : -1),
-      roughness: 0.55,
-      side: THREE.DoubleSide,
-    }));
-    board.position.copy(s.position).addScaledVector(s.right, outsideSide * (half + 1.6));
-    board.position.y += 1.5;
+    const boardPos = s.position.clone().addScaledVector(s.right, outsideSide * (half + 1.6));
+    boardPos.y += 1.5;
     const basis = new THREE.Matrix4().makeBasis(s.right, new THREE.Vector3(0, 1, 0), s.tangent);
-    board.quaternion.setFromRotationMatrix(basis);
-    board.castShadow = true;
+    _q.setFromRotationMatrix(basis);
+    (turnsPositive ? rightBatch : leftBatch).add(boardPos, _q.clone(), _scale.set(1, 1, 1).clone());
 
-    const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.08, 1.5, 6), postMat);
-    post.position.copy(board.position);
-    post.position.y -= 0.75;
-    post.castShadow = true;
+    const postPos = boardPos.clone();
+    postPos.y -= 0.75;
+    postBatch.add(postPos, IDENTITY_Q, _scale.set(1, 1, 1).clone());
+  }
 
-    group.add(board, post);
+  const group = new THREE.Group();
+  for (const batch of [rightBatch, leftBatch, postBatch]) {
+    const mesh = batch.build();
+    if (mesh) group.add(mesh);
   }
   return group;
 }
@@ -860,7 +1020,7 @@ export class Track {
     this.totalLength = this.samples.totalLength;
 
     this.group = new THREE.Group();
-    const { mesh: groundMesh, center, size } = buildGround(this.curve);
+    const { mesh: groundMesh, center, size } = buildGround(this.curve, this.samples);
     this.group.add(groundMesh);
     this.group.add(buildRoadMesh(this.samples));
     this.group.add(buildCurbs(this.samples));
@@ -869,8 +1029,11 @@ export class Track {
     scene.add(this.group);
 
     scatterDecorations(scene, this.samples, treeAssets);
-    scene.add(buildMountains(center, size / 2));
-    if (treeAssets?.terrainGltf) scene.add(buildTerrainHills(center, size / 2, treeAssets.terrainGltf));
+    scene.add(buildMountains(center, size / 2, this.samples));
+    if (treeAssets?.terrainGltf) {
+      const hills = buildTerrainHills(center, size / 2, treeAssets.terrainGltf, this.samples);
+      if (hills) scene.add(hills);
+    }
 
     this.checkpoints = buildCheckpoints(this.samples);
     scene.add(buildCheckpointArches(this.samples, this.checkpoints));
