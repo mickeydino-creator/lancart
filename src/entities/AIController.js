@@ -29,9 +29,12 @@ export class AIController {
     while (diff > Math.PI) diff -= Math.PI * 2;
     while (diff < -Math.PI) diff += Math.PI * 2;
 
-    const steering = THREE.MathUtils.clamp(diff * 1.1, -1, 1);
-    const sharpTurn = Math.abs(diff) > 0.6;
-    const throttle = THREE.MathUtils.clamp(1 - Math.abs(diff) * 0.4, 0.6, 1) * this.skill;
+    // Physics maps positive steering to a rightward turn (heading decreases),
+    // so to close a positive heading diff (target is to our left in heading
+    // terms) we need negative steering - this sign must mirror Physics.js.
+    const steering = THREE.MathUtils.clamp(-diff * 1.7, -1, 1);
+    const sharpTurn = Math.abs(diff) > 0.5;
+    const throttle = THREE.MathUtils.clamp(1 - Math.abs(diff) * 0.5, 0.55, 1) * this.skill;
 
     return {
       steering,

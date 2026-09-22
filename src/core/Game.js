@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { Track } from "../world/Track.js";
 import { Kart } from "../entities/Kart.js";
+import { SkidTrail } from "../entities/SkidTrail.js";
 import { AIController } from "../entities/AIController.js";
 import { ChaseCamera } from "../camera/ChaseCamera.js";
 import { RaceManager } from "../race/RaceManager.js";
@@ -63,33 +64,50 @@ export class Game {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // ACES tone mapping gives the warm sunset lighting natural contrast and
+    // highlight roll-off without any post-processing passes.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.08;
 
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0xffd28a, 140, 340);
+    this.scene.fog = new THREE.Fog(0xf0b98a, 130, 360);
 
-    const skyGeo = new THREE.SphereGeometry(450, 16, 16);
+    const skyGeo = new THREE.SphereGeometry(450, 20, 20);
     const skyMat = new THREE.MeshBasicMaterial({ map: buildSkyTexture(), side: THREE.BackSide, fog: false });
     this.scene.add(new THREE.Mesh(skyGeo, skyMat));
 
     this.camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 1000);
     this.chaseCamera = new ChaseCamera(this.camera);
 
-    const hemi = new THREE.HemisphereLight(0xffe9c7, 0x3a6b34, 0.7);
+    // Soft sky/ground fill so shadow sides never go fully black.
+    const hemi = new THREE.HemisphereLight(0xfff0d6, 0x3d6b34, 0.85);
     this.scene.add(hemi);
-    const sun = new THREE.DirectionalLight(0xffd9a0, 1.6);
-    sun.position.set(-80, 90, 40);
+
+    // Warm low-angle "sunset" key light.
+    const sun = new THREE.DirectionalLight(0xffcf96, 2.1);
+    sun.position.set(-90, 70, 55);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
-    sun.shadow.camera.left = -140;
-    sun.shadow.camera.right = 140;
-    sun.shadow.camera.top = 140;
-    sun.shadow.camera.bottom = -140;
-    sun.shadow.camera.far = 300;
-    sun.shadow.bias = -0.0015;
+    sun.shadow.camera.left = -150;
+    sun.shadow.camera.right = 150;
+    sun.shadow.camera.top = 150;
+    sun.shadow.camera.bottom = -150;
+    sun.shadow.camera.near = 10;
+    sun.shadow.camera.far = 320;
+    sun.shadow.bias = -0.0012;
+    sun.shadow.normalBias = 0.02;
     this.scene.add(sun);
     this.scene.add(sun.target);
 
+    // Cool, dim fill light from the opposite side so shadowed faces still
+    // read some form/color instead of crushing to black.
+    const fill = new THREE.DirectionalLight(0x7ea6ff, 0.35);
+    fill.position.set(70, 40, -60);
+    this.scene.add(fill);
+
     this.track = new Track(this.scene);
+    this.skidTrail = new SkidTrail(this.scene);
+    this._skidSpawnTimer = [];
 
     this.kartCount = 1 + AI_COUNT;
     this.playerIndex = 0;
@@ -109,6 +127,7 @@ export class Game {
       this.states.push(state);
       this._prevCollisionImpulse.push(0);
       this._prevBoosting.push(false);
+      this._skidSpawnTimer.push(0);
 
       const laneOffset = isPlayer ? 0 : ((i - 1) - (AI_COUNT - 1) / 2) * 2.2;
       this.ai.push(
@@ -263,7 +282,9 @@ export class Game {
 
     for (let i = 0; i < this.kartCount; i++) {
       this.karts[i].updateVisual(this.states[i], dt);
+      this._updateSkidMarks(i, dt);
     }
+    this.skidTrail.update(dt);
 
     this.chaseCamera.update(this.states[this.playerIndex], dt);
     this.renderer.render(this.scene, this.camera);
@@ -297,6 +318,17 @@ export class Game {
 
     const speedRatio = Math.min(1, Math.abs(playerState.speed) / PHYSICS.maxSpeed);
     this.audio.updateEngine(speedRatio, playerState.isBoosting);
+  }
+
+  _updateSkidMarks(kartIndex, dt) {
+    const state = this.states[kartIndex];
+    this._skidSpawnTimer[kartIndex] -= dt;
+    if (!state.isDrifting || Math.abs(state.speed) < 4) return;
+    if (this._skidSpawnTimer[kartIndex] > 0) return;
+    this._skidSpawnTimer[kartIndex] = 0.045;
+    for (const pos of this.karts[kartIndex].getRearWheelPositions()) {
+      this.skidTrail.spawn(pos, state.heading);
+    }
   }
 
   _updateHUD() {

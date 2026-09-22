@@ -88,19 +88,27 @@ export class UI {
     el("result-position").textContent = ORDINALS[result.position - 1] ?? `${result.position}th`;
     el("result-time").textContent = formatTime(result.totalTime);
     el("result-best-lap").textContent = formatTime(result.bestLap);
+    el("result-medal").textContent = result.position === 1 ? "🥇" : result.position === 2 ? "🥈" : result.position === 3 ? "🥉" : "🏁";
     this.screens.results.classList.remove("hidden");
   }
 
   updateHUD({ lap, totalLaps, position, elapsed, speedKmh, drifting, boostLevel, boostFuel }) {
-    el("hud-lap").textContent = `LAP ${lap}/${totalLaps}`;
-    el("hud-position").textContent = ORDINALS[position - 1] ?? `${position}th`;
-    el("hud-timer").textContent = formatTime(elapsed);
+    el("hud-lap-text").textContent = `LAP ${lap}/${totalLaps}`;
+    el("hud-position-text").textContent = ORDINALS[position - 1] ?? `${position}th`;
+    el("hud-timer-text").textContent = formatTime(elapsed);
     el("hud-speed").textContent = Math.round(speedKmh);
+
+    const speedRatio = Math.min(1, speedKmh / 115);
+    const circumference = 2 * Math.PI * 42;
+    const ring = el("speed-ring-fill");
+    ring.style.strokeDasharray = `${circumference}`;
+    ring.style.strokeDashoffset = `${circumference * (1 - speedRatio)}`;
 
     const driftIndicator = el("drift-indicator");
     driftIndicator.classList.toggle("active", drifting);
     driftIndicator.classList.toggle("boost-ready", boostLevel > 0);
-    driftIndicator.textContent = boostLevel >= 2 ? "SUPER BOOST!" : boostLevel >= 1 ? "BOOST READY" : "DRIFT";
+    driftIndicator.querySelector("span").textContent =
+      boostLevel >= 2 ? "SUPER BOOST!" : boostLevel >= 1 ? "BOOST READY" : "DRIFT";
 
     el("boost-bar-fill").style.width = `${Math.round(boostFuel * 100)}%`;
   }

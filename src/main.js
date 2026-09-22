@@ -27,6 +27,20 @@ document.querySelectorAll(".track-card").forEach((card) => {
   });
 });
 
+// Any button click gets a light UI tick; the very first one also unlocks
+// audio (WebAudio requires a user gesture before it can play anything).
+document.addEventListener(
+  "click",
+  (e) => {
+    if (e.target.closest(".btn, .hud-icon-btn, .track-card")) {
+      game.audio.init();
+      game.audio.resume();
+      game.audio.playUIClick();
+    }
+  },
+  { capture: true }
+);
+
 ui.showMenu();
 
 if (import.meta.env.DEV) {

@@ -52,49 +52,96 @@ function sampleTrack(curve) {
   return samples;
 }
 
+// --- Textures ----------------------------------------------------------------
+
 function asphaltTexture() {
+  const size = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  const grad = ctx.createLinearGradient(0, 0, size, 0);
+  grad.addColorStop(0, "#2e3136");
+  grad.addColorStop(0.5, "#3c3f45");
+  grad.addColorStop(1, "#2e3136");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  for (let i = 0; i < 3200; i++) {
+    const shade = 48 + Math.floor(Math.random() * 26);
+    ctx.fillStyle = `rgba(${shade},${shade},${shade + 3},0.5)`;
+    const w = 1 + Math.random() * 2.5;
+    ctx.fillRect(Math.random() * size, Math.random() * size, w, w);
+  }
+  // subtle tire scuff streaks along the racing line
+  ctx.strokeStyle = "rgba(15,15,18,0.18)";
+  ctx.lineWidth = 6;
+  for (let i = 0; i < 10; i++) {
+    const x = size * 0.3 + Math.random() * size * 0.4;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x + (Math.random() - 0.5) * 40, size);
+    ctx.stroke();
+  }
+  // dashed center line
+  ctx.fillStyle = "#e9dd8f";
+  const dashW = size * 0.028;
+  for (let y = 0; y < size; y += size / 6) {
+    ctx.fillRect(size / 2 - dashW / 2, y, dashW, size / 10);
+  }
+  // curb-style edge lines
+  ctx.fillStyle = "#eceff2";
+  ctx.fillRect(size * 0.045, 0, size * 0.018, size);
+  ctx.fillRect(size * 0.955 - size * 0.018, 0, size * 0.018, size);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function curbTexture() {
+  // Red/white rumble-strip curb running along the road edges.
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = 16;
+  const ctx = canvas.getContext("2d");
+  for (let x = 0; x < size; x += 16) {
+    ctx.fillStyle = (x / 16) % 2 === 0 ? "#d13a3a" : "#f2f2f2";
+    ctx.fillRect(x, 0, 16, 16);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+function grassTexture() {
   const size = 256;
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#3a3d42";
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 1.4);
+  grad.addColorStop(0, "#5fb14a");
+  grad.addColorStop(1, "#4a9a3c");
+  ctx.fillStyle = grad;
   ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 900; i++) {
-    const shade = 55 + Math.floor(Math.random() * 20);
-    ctx.fillStyle = `rgb(${shade},${shade},${shade + 2})`;
-    ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+  for (let i = 0; i < 5000; i++) {
+    const shade = Math.random();
+    ctx.fillStyle = shade > 0.6 ? "#69bd52" : shade > 0.3 ? "#54a844" : "#3f8f33";
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    ctx.fillRect(x, y, 2, 2 + Math.random() * 2);
   }
-  // lane dashes down the center
-  ctx.fillStyle = "#e8d97a";
-  const dashW = size * 0.035;
-  ctx.fillRect(size / 2 - dashW / 2, 0, dashW, size * 0.5);
-  // edge lines
-  ctx.fillStyle = "#e8e8e8";
-  ctx.fillRect(size * 0.06, 0, size * 0.02, size);
-  ctx.fillRect(size * 0.94 - size * 0.02, 0, size * 0.02, size);
+  // faint mown-lawn stripes
+  ctx.fillStyle = "rgba(255,255,255,0.03)";
+  for (let x = 0; x < size; x += 32) ctx.fillRect(x, 0, 16, size);
   const tex = new THREE.CanvasTexture(canvas);
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   return tex;
 }
 
-function grassTexture() {
-  const size = 128;
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#4c9a3a";
-  ctx.fillRect(0, 0, size, size);
-  for (let i = 0; i < 1400; i++) {
-    const shade = Math.random();
-    ctx.fillStyle = shade > 0.5 ? "#5aab45" : "#428a33";
-    ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
-  }
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  return tex;
-}
+// --- Road / ground -------------------------------------------------------------
 
 function buildRoadMesh(samples) {
   const half = ROAD_WIDTH / 2;
@@ -129,16 +176,59 @@ function buildRoadMesh(samples) {
 
   const material = new THREE.MeshStandardMaterial({
     map: asphaltTexture(),
-    roughness: 0.95,
-    metalness: 0.02,
+    roughness: 0.92,
+    metalness: 0.03,
   });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.receiveShadow = true;
   return mesh;
 }
 
-function buildStartFinishStripe(samples) {
+/** Thin curb ribbons hugging both edges of the road - a clean visual line
+ * separating drivable road from the grass, and a track-day visual cue. */
+function buildCurbs(samples) {
   const half = ROAD_WIDTH / 2;
+  const curbWidth = 0.55;
+  const n = samples.length;
+  const group = new THREE.Group();
+  const tex = curbTexture();
+  tex.repeat.set(samples.totalLength / 2.4, 1);
+  const material = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
+
+  for (const side of [-1, 1]) {
+    const positions = [];
+    const uvs = [];
+    const indices = [];
+    for (let i = 0; i < n; i++) {
+      const s = samples[i];
+      const inner = s.position.clone().addScaledVector(s.right, side * (half - curbWidth * 0.15));
+      const outer = s.position.clone().addScaledVector(s.right, side * (half + curbWidth * 0.85));
+      positions.push(inner.x, inner.y + 0.025, inner.z);
+      positions.push(outer.x, outer.y + 0.025, outer.z);
+      const u = (i / n) * (samples.totalLength / 2.4);
+      uvs.push(u, 0, u, 1);
+    }
+    for (let i = 0; i < n; i++) {
+      const a = i * 2;
+      const b = i * 2 + 1;
+      const c = ((i + 1) % n) * 2;
+      const d = ((i + 1) % n) * 2 + 1;
+      if (side > 0) indices.push(a, c, b, b, c, d);
+      else indices.push(a, b, c, b, d, c);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+  return group;
+}
+
+function buildStartFinishStripe(samples) {
   const s = samples[0];
   const canvas = document.createElement("canvas");
   canvas.width = 64;
@@ -165,74 +255,153 @@ function buildStartFinishStripe(samples) {
 
 function buildGround(curve) {
   const box = new THREE.Box3().setFromPoints(curve.getPoints(200));
-  const size = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) + 220;
+  const size = Math.max(box.max.x - box.min.x, box.max.z - box.min.z) + 260;
   const geometry = new THREE.PlaneGeometry(size, size, 1, 1);
   const tex = grassTexture();
-  tex.repeat.set(size / 12, size / 12);
+  tex.repeat.set(size / 14, size / 14);
   const material = new THREE.MeshStandardMaterial({ map: tex, roughness: 1 });
   const mesh = new THREE.Mesh(geometry, material);
   mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(
-    (box.max.x + box.min.x) / 2,
-    -0.05,
-    (box.max.z + box.min.z) / 2
-  );
+  mesh.position.set((box.max.x + box.min.x) / 2, -0.05, (box.max.z + box.min.z) / 2);
   mesh.receiveShadow = true;
-  return mesh;
+  return { mesh, center: mesh.position.clone(), size };
 }
 
-function buildBarriers(samples) {
-  const half = ROAD_WIDTH / 2 + 0.6;
-  const geometry = new THREE.BoxGeometry(0.5, 0.9, 2.1);
-  const material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.6 });
-  const step = 2; // place a segment every 2 samples for a continuous rail look
-  const count = Math.ceil(samples.length / step) * 2;
-  const mesh = new THREE.InstancedMesh(geometry, material, count);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
+// --- Barriers ------------------------------------------------------------------
 
-  const color = new THREE.Color();
+/** A continuous red/white striped guardrail ribbon plus periodic support posts. */
+function buildBarriers(samples) {
+  const half = ROAD_WIDTH / 2 + 0.45;
+  const railHeight = 0.62;
+  const n = samples.length;
+  const group = new THREE.Group();
+
+  const stripeTex = curbTexture();
+  stripeTex.repeat.set(samples.totalLength / 3.2, 1);
+  const railMat = new THREE.MeshStandardMaterial({ map: stripeTex, roughness: 0.55, metalness: 0.15 });
+
+  for (const side of [-1, 1]) {
+    const positions = [];
+    const normals = [];
+    const uvs = [];
+    const indices = [];
+    for (let i = 0; i < n; i++) {
+      const s = samples[i];
+      const base = s.position.clone().addScaledVector(s.right, side * half);
+      const top = base.clone();
+      top.y += railHeight;
+      positions.push(base.x, base.y + 0.05, base.z, top.x, top.y, top.z);
+      const outward = s.right.clone().multiplyScalar(side);
+      normals.push(outward.x, outward.y, outward.z, outward.x, outward.y, outward.z);
+      const u = (i / n) * (samples.totalLength / 3.2);
+      uvs.push(u, 0, u, 1);
+    }
+    for (let i = 0; i < n; i++) {
+      const a = i * 2;
+      const b = i * 2 + 1;
+      const c = ((i + 1) % n) * 2;
+      const d = ((i + 1) % n) * 2 + 1;
+      if (side > 0) indices.push(a, c, b, b, c, d);
+      else indices.push(a, b, c, b, d, c);
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+    geometry.setAttribute("uv", new THREE.Float32BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    const mesh = new THREE.Mesh(geometry, railMat);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    group.add(mesh);
+  }
+
+  // support posts
+  const postGeo = new THREE.CylinderGeometry(0.09, 0.11, railHeight + 0.35, 6);
+  const postMat = new THREE.MeshStandardMaterial({ color: "#3a3d42", roughness: 0.6, metalness: 0.3 });
+  const step = 4;
+  const postCount = Math.ceil(n / step) * 2;
+  const posts = new THREE.InstancedMesh(postGeo, postMat, postCount);
+  posts.castShadow = true;
   const m = new THREE.Matrix4();
-  const q = new THREE.Quaternion();
-  const up = new THREE.Vector3(0, 1, 0);
+  const identity = new THREE.Quaternion();
   let idx = 0;
-  for (let i = 0; i < samples.length; i += step) {
+  for (let i = 0; i < n; i += step) {
     const s = samples[i];
-    const stripe = Math.floor(i / step) % 2 === 0;
     for (const side of [-1, 1]) {
       const pos = s.position.clone().addScaledVector(s.right, side * half);
-      pos.y += 0.5;
-      q.setFromUnitVectors(new THREE.Vector3(0, 0, 1), s.tangent);
-      m.compose(pos, q, new THREE.Vector3(1, 1, 1));
-      mesh.setMatrixAt(idx, m);
-      color.set(stripe ? "#e6e6e6" : "#e03a3a");
-      mesh.setColorAt(idx, color);
+      pos.y += (railHeight + 0.1) / 2;
+      m.compose(pos, identity, new THREE.Vector3(1, 1, 1));
+      posts.setMatrixAt(idx, m);
       idx++;
     }
   }
-  mesh.instanceMatrix.needsUpdate = true;
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  return mesh;
+  posts.instanceMatrix.needsUpdate = true;
+  group.add(posts);
+
+  return group;
 }
 
-function makeTreeGeometry() {
+// --- Decorations -----------------------------------------------------------------
+
+function makeTreeGeometry(variant) {
   const group = new THREE.Group();
-  const trunk = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.25, 0.35, 2, 6),
-    new THREE.MeshStandardMaterial({ color: "#6b4423", roughness: 1 })
-  );
-  trunk.position.y = 1;
-  const leaves = new THREE.Mesh(
-    new THREE.ConeGeometry(1.6, 3.2, 8),
-    new THREE.MeshStandardMaterial({ color: "#2f7d3c", roughness: 0.9 })
-  );
-  leaves.position.y = 3.2;
-  const leaves2 = new THREE.Mesh(
-    new THREE.ConeGeometry(1.2, 2.4, 8),
-    new THREE.MeshStandardMaterial({ color: "#3a9048", roughness: 0.9 })
-  );
-  leaves2.position.y = 4.4;
-  group.add(trunk, leaves, leaves2);
+  const hue = 0.32 + Math.random() * 0.06;
+  const trunkMat = new THREE.MeshStandardMaterial({ color: "#6b4423", roughness: 1 });
+  const leafColorA = new THREE.Color().setHSL(hue, 0.45, 0.32);
+  const leafColorB = new THREE.Color().setHSL(hue, 0.5, 0.4);
+  const leafMatA = new THREE.MeshStandardMaterial({ color: leafColorA, roughness: 0.9, flatShading: true });
+  const leafMatB = new THREE.MeshStandardMaterial({ color: leafColorB, roughness: 0.9, flatShading: true });
+
+  if (variant === "round") {
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.3, 1.6, 6), trunkMat);
+    trunk.position.y = 0.8;
+    group.add(trunk);
+    const blobs = [
+      [0, 2.3, 0, 1.15],
+      [0.55, 2.0, 0.2, 0.8],
+      [-0.5, 2.05, -0.25, 0.85],
+      [0.1, 2.75, -0.3, 0.75],
+    ];
+    for (const [x, y, z, r] of blobs) {
+      const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 1), Math.random() > 0.5 ? leafMatA : leafMatB);
+      blob.position.set(x, y, z);
+      group.add(blob);
+    }
+  } else {
+    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.35, 2, 6), trunkMat);
+    trunk.position.y = 1;
+    const leaves = new THREE.Mesh(new THREE.ConeGeometry(1.5, 3, 8), leafMatA);
+    leaves.position.y = 3.1;
+    const leaves2 = new THREE.Mesh(new THREE.ConeGeometry(1.1, 2.2, 8), leafMatB);
+    leaves2.position.y = 4.3;
+    const leaves3 = new THREE.Mesh(new THREE.ConeGeometry(0.7, 1.5, 8), leafMatA);
+    leaves3.position.y = 5.3;
+    group.add(trunk, leaves, leaves2, leaves3);
+  }
+
+  group.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  return group;
+}
+
+function makeBushGeometry() {
+  const group = new THREE.Group();
+  const hue = 0.3 + Math.random() * 0.05;
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(hue, 0.4, 0.34),
+    roughness: 0.95,
+    flatShading: true,
+  });
+  for (let i = 0; i < 3; i++) {
+    const r = 0.45 + Math.random() * 0.35;
+    const blob = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
+    blob.position.set((Math.random() - 0.5) * 0.6, r * 0.7, (Math.random() - 0.5) * 0.6);
+    group.add(blob);
+  }
   group.traverse((o) => {
     if (o.isMesh) {
       o.castShadow = true;
@@ -243,19 +412,36 @@ function makeTreeGeometry() {
 }
 
 function makeRockGeometry() {
-  const geo = new THREE.IcosahedronGeometry(1, 0);
-  const mat = new THREE.MeshStandardMaterial({ color: "#8b8d94", flatShading: true, roughness: 1 });
-  const mesh = new THREE.Mesh(geo, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
+  const group = new THREE.Group();
+  const shade = 0.5 + Math.random() * 0.12;
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(shade * 0.55, shade * 0.53, shade * 0.5),
+    flatShading: true,
+    roughness: 1,
+  });
+  const count = 1 + Math.floor(Math.random() * 3);
+  for (let i = 0; i < count; i++) {
+    const r = 0.5 + Math.random() * 0.6;
+    const rock = new THREE.Mesh(new THREE.IcosahedronGeometry(r, 0), mat);
+    rock.position.set((Math.random() - 0.5) * 0.9, r * 0.55, (Math.random() - 0.5) * 0.9);
+    rock.rotation.set(Math.random(), Math.random(), Math.random());
+    rock.scale.y = 0.7 + Math.random() * 0.4;
+    group.add(rock);
+  }
+  group.traverse((o) => {
+    if (o.isMesh) {
+      o.castShadow = true;
+      o.receiveShadow = true;
+    }
+  });
+  return group;
 }
 
 function makeSignGeometry(text) {
   const group = new THREE.Group();
   const pole = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.08, 0.08, 2.6, 6),
-    new THREE.MeshStandardMaterial({ color: "#cccccc" })
+    new THREE.CylinderGeometry(0.07, 0.07, 2.6, 6),
+    new THREE.MeshStandardMaterial({ color: "#cfd2d6", metalness: 0.4, roughness: 0.5 })
   );
   pole.position.y = 1.3;
   const canvas = document.createElement("canvas");
@@ -264,15 +450,18 @@ function makeSignGeometry(text) {
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#ffd23f";
   ctx.fillRect(0, 0, 128, 64);
+  ctx.strokeStyle = "#14181f";
+  ctx.lineWidth = 5;
+  ctx.strokeRect(4, 4, 120, 56);
   ctx.fillStyle = "#14181f";
-  ctx.font = "bold 30px sans-serif";
+  ctx.font = "bold 28px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(text, 64, 34);
   const tex = new THREE.CanvasTexture(canvas);
   const board = new THREE.Mesh(
     new THREE.PlaneGeometry(1.6, 0.8),
-    new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide })
+    new THREE.MeshStandardMaterial({ map: tex, side: THREE.DoubleSide, roughness: 0.6 })
   );
   board.position.y = 2.3;
   group.add(pole, board);
@@ -282,32 +471,42 @@ function makeSignGeometry(text) {
   return group;
 }
 
-function scatterDecorations(scene, samples, curve) {
+function scatterDecorations(scene, samples) {
   const group = new THREE.Group();
   group.name = "decorations";
   const signTexts = ["TURN", "SLOW", "GO!", "50m"];
   let signIdx = 0;
+  const startPos = samples[0].position;
+  // The track's closing curve loops back close to the start straight in
+  // world space even though it's "far away" by arc-length index, so the
+  // start-area clearance has to be a real-world-distance check, not just an
+  // index range - otherwise decorations from that curve end up right next
+  // to the starting grid and camera.
+  const startClearance = 34;
 
-  for (let i = 0; i < samples.length; i += 5) {
+  for (let i = 0; i < samples.length; i += 4) {
     const s = samples[i];
-    // skip decorations too close to the start/finish grid
-    if (i < 8 || i > samples.length - 8) continue;
+    if (s.position.distanceTo(startPos) < startClearance) continue;
 
     for (const side of [-1, 1]) {
-      if (Math.random() < 0.35) continue; // leave gaps, avoid a wall of props
-      const dist = 5 + Math.random() * 10;
+      if (Math.random() < 0.3) continue; // leave gaps, avoid a wall of props
+      const dist = 4.5 + Math.random() * 11;
       const pos = s.position.clone().addScaledVector(s.right, side * (ROAD_WIDTH / 2 + dist));
       const roll = Math.random();
       let obj;
-      if (roll < 0.55) {
-        obj = makeTreeGeometry();
-        const scale = 0.8 + Math.random() * 0.6;
-        obj.scale.setScalar(scale);
-      } else if (roll < 0.85) {
+      if (roll < 0.4) {
+        obj = makeTreeGeometry("pine");
+        obj.scale.setScalar(0.8 + Math.random() * 0.6);
+      } else if (roll < 0.58) {
+        obj = makeTreeGeometry("round");
+        obj.scale.setScalar(0.85 + Math.random() * 0.5);
+      } else if (roll < 0.78) {
         obj = makeRockGeometry();
-        const scale = 0.6 + Math.random() * 1.1;
+        const scale = 0.6 + Math.random() * 1.0;
         obj.scale.set(scale, scale * 0.8, scale);
         obj.rotation.y = Math.random() * Math.PI;
+      } else if (roll < 0.92) {
+        obj = makeBushGeometry();
       } else {
         obj = makeSignGeometry(signTexts[signIdx % signTexts.length]);
         signIdx++;
@@ -321,31 +520,91 @@ function scatterDecorations(scene, samples, curve) {
   return group;
 }
 
+/** Distant low-poly mountain silhouettes ringing the track for a non-empty horizon. */
+function buildMountains(center, trackRadius) {
+  const group = new THREE.Group();
+  const ringRadius = trackRadius + 140;
+  const count = 26;
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2 + Math.random() * 0.15;
+    const dist = ringRadius + Math.random() * 90;
+    const height = 30 + Math.random() * 55;
+    const radius = 28 + Math.random() * 30;
+    const hue = 0.66 + Math.random() * 0.05;
+    const light = 0.42 + (height / 85) * 0.18;
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHSL(hue, 0.22, light),
+      roughness: 1,
+      flatShading: true,
+      fog: true,
+    });
+    const mountain = new THREE.Mesh(new THREE.ConeGeometry(radius, height, 5), mat);
+    mountain.position.set(center.x + Math.cos(angle) * dist, height / 2 - 4, center.z + Math.sin(angle) * dist);
+    mountain.rotation.y = Math.random() * Math.PI;
+    // faint snow cap using scaled cap trick: a small lighter cone at the peak
+    if (height > 55) {
+      const cap = new THREE.Mesh(
+        new THREE.ConeGeometry(radius * 0.38, height * 0.32, 5),
+        new THREE.MeshStandardMaterial({ color: "#eef3f7", roughness: 1, flatShading: true, fog: true })
+      );
+      cap.position.y = height / 2 - height * 0.14;
+      mountain.add(cap);
+    }
+    group.add(mountain);
+  }
+  return group;
+}
+
 function buildStartLights(samples) {
   const group = new THREE.Group();
   const s = samples[0];
   const gantryWidth = ROAD_WIDTH + 2;
-  const postMat = new THREE.MeshStandardMaterial({ color: "#2a2e35" });
-  const leftPost = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 6, 8), postMat);
+  const postMat = new THREE.MeshStandardMaterial({ color: "#23262c", roughness: 0.55, metalness: 0.4 });
+  const leftPost = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.28, 6, 8), postMat);
   const rightPost = leftPost.clone();
   leftPost.position.copy(s.position).addScaledVector(s.right, -gantryWidth / 2);
   rightPost.position.copy(s.position).addScaledVector(s.right, gantryWidth / 2);
   leftPost.position.y += 3;
   rightPost.position.y += 3;
-  const beam = new THREE.Mesh(new THREE.BoxGeometry(gantryWidth + 0.6, 0.4, 0.4), postMat);
+  const beam = new THREE.Mesh(new THREE.BoxGeometry(gantryWidth + 0.6, 0.45, 0.45), postMat);
   beam.position.copy(s.position);
   beam.position.y += 6;
   const beamBasis = new THREE.Matrix4().makeBasis(s.right, new THREE.Vector3(0, 1, 0), s.tangent);
   beam.quaternion.setFromRotationMatrix(beamBasis);
 
+  // Small name placard mounted ON TOP of the beam - well clear of the
+  // driving lane and camera sightline, purely a landmark/decoration.
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 40;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ff5d3b";
+  ctx.fillRect(0, 0, 256, 40);
+  ctx.fillStyle = "#ffd23f";
+  ctx.font = "bold 22px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("SUNSET CIRCUIT", 128, 21);
+  const bannerTex = new THREE.CanvasTexture(canvas);
+  const bannerWidth = Math.min(9, gantryWidth * 0.55);
+  const banner = new THREE.Mesh(
+    new THREE.PlaneGeometry(bannerWidth, bannerWidth * (40 / 256)),
+    new THREE.MeshBasicMaterial({ map: bannerTex, side: THREE.DoubleSide })
+  );
+  banner.position.copy(s.position);
+  banner.position.y += 7.55;
+  const bannerBasis = new THREE.Matrix4().makeBasis(s.right, new THREE.Vector3(0, 1, 0), s.tangent);
+  banner.quaternion.setFromRotationMatrix(bannerBasis);
+  group.add(banner);
+
   const lights = [];
-  const lightGeo = new THREE.SphereGeometry(0.35, 12, 12);
+  const lightGeo = new THREE.SphereGeometry(0.34, 12, 12);
   for (let i = -1; i <= 1; i++) {
     const mat = new THREE.MeshStandardMaterial({ color: "#3a0d0d", emissive: "#3a0d0d", emissiveIntensity: 1 });
     const bulb = new THREE.Mesh(lightGeo, mat);
     bulb.position.copy(s.position);
     bulb.position.addScaledVector(s.right, i * 1.2);
-    bulb.position.y += 5.3;
+    bulb.position.y += 6.7;
     lights.push(bulb);
     group.add(bulb);
   }
@@ -355,6 +614,39 @@ function buildStartLights(samples) {
     if (o.isMesh) o.castShadow = true;
   });
   return { group, lights };
+}
+
+/** A slim arch with a colored flag panel at each checkpoint - a visual
+ * landmark so players can tell where they are on the loop at a glance. */
+function buildCheckpointArches(samples, checkpoints) {
+  const group = new THREE.Group();
+  const half = ROAD_WIDTH / 2;
+  const postMat = new THREE.MeshStandardMaterial({ color: "#e8e8e8", roughness: 0.5, metalness: 0.3 });
+
+  for (const cp of checkpoints) {
+    if (cp.index === 0) continue; // start/finish already has its own gantry
+    const s = samples[cp.sampleIndex];
+    const hue = (cp.index / CHECKPOINT_COUNT) % 1;
+    const flagColor = new THREE.Color().setHSL(hue, 0.65, 0.55);
+
+    for (const side of [-1, 1]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 4.6, 7), postMat);
+      post.position.copy(s.position).addScaledVector(s.right, side * (half + 0.4));
+      post.position.y += 2.3;
+      post.castShadow = true;
+      group.add(post);
+    }
+
+    const flagMat = new THREE.MeshStandardMaterial({ color: flagColor, roughness: 0.5, side: THREE.DoubleSide });
+    const flag = new THREE.Mesh(new THREE.PlaneGeometry(1.1, 0.6), flagMat);
+    flag.position.copy(s.position).addScaledVector(s.right, half + 0.4);
+    flag.position.y += 4.2;
+    const basis = new THREE.Matrix4().makeBasis(s.tangent, new THREE.Vector3(0, 1, 0), s.right);
+    flag.quaternion.setFromRotationMatrix(basis);
+    flag.castShadow = true;
+    group.add(flag);
+  }
+  return group;
 }
 
 function buildCheckpoints(samples) {
@@ -383,19 +675,23 @@ export class Track {
     this.totalLength = this.samples.totalLength;
 
     this.group = new THREE.Group();
-    this.group.add(buildGround(this.curve));
+    const { mesh: groundMesh, center, size } = buildGround(this.curve);
+    this.group.add(groundMesh);
     this.group.add(buildRoadMesh(this.samples));
+    this.group.add(buildCurbs(this.samples));
     this.group.add(buildStartFinishStripe(this.samples));
     this.group.add(buildBarriers(this.samples));
     scene.add(this.group);
 
-    scatterDecorations(scene, this.samples, this.curve);
+    scatterDecorations(scene, this.samples);
+    scene.add(buildMountains(center, size / 2));
+
+    this.checkpoints = buildCheckpoints(this.samples);
+    scene.add(buildCheckpointArches(this.samples, this.checkpoints));
 
     const { group: lightsGroup, lights } = buildStartLights(this.samples);
     scene.add(lightsGroup);
     this.startLights = lights;
-
-    this.checkpoints = buildCheckpoints(this.samples);
 
     const s0 = this.samples[0];
     this.startPosition = s0.position.clone().add(new THREE.Vector3(0, 0.4, 0));
