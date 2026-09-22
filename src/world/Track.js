@@ -30,8 +30,16 @@ const ROAD_WIDTH = 15;
 const SEGMENTS = 400; // dense arc-length samples around the closed loop
 const CHECKPOINT_COUNT = 12;
 
+// A compact loop can pass close to itself elsewhere on the lap even after
+// locally reshaping the tight spots (see isClearOfRoad below) - scaling the
+// whole layout out from the start point multiplies every pairwise distance
+// between samples by the same factor, so it enlarges every close pass at
+// once instead of chasing them one at a time. Keeps the same shape/flavor,
+// just bigger.
+const LAYOUT_SCALE = 1.7;
+
 function buildCurve() {
-  const points = WAYPOINTS.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+  const points = WAYPOINTS.map((p) => new THREE.Vector3(p[0] * LAYOUT_SCALE, p[1], p[2] * LAYOUT_SCALE));
   return new THREE.CatmullRomCurve3(points, true, "catmullrom", 0.5);
 }
 
